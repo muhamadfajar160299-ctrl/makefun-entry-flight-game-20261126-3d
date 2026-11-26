@@ -12,6 +12,14 @@
     g.fillStyle = "#f3ead6"; g.fillRect(0, 0, 512, 128);
     g.fillStyle = "#0f6f6a"; g.fillRect(0, 86, 512, 42);
     g.fillStyle = "#e8a91c"; g.fillRect(0, 78, 512, 8);
+    // panel stations + rivet rows so the fuselage reads up close
+    g.strokeStyle = "rgba(20,49,61,0.4)"; g.lineWidth = 2;
+    for (var px = 64; px < 512; px += 64) {
+      g.beginPath(); g.moveTo(px, 0); g.lineTo(px, 128); g.stroke();
+    }
+    g.fillStyle = "rgba(20,49,61,0.45)";
+    for (var rx = 32; rx < 512; rx += 32)
+      for (var ry = 12; ry < 128; ry += 24) g.fillRect(rx, ry, 2, 2);
     g.fillStyle = "#14313d"; g.font = "bold 44px Arial"; g.textAlign = "center";
     g.fillText("KESTREL-9", 256, 56);
     var tex = new THREE.CanvasTexture(cv);
@@ -181,7 +189,7 @@
   function updatePlane(pl, dt, t, state, speedMs, throttle) {
     var rpm = 0.25 + throttle * 2.2 + speedMs * 0.02;
     pl.prop.rotation.z -= rpm * 22 * dt;
-    pl.disc.material.opacity = speedMs > 8 ? Math.min(0.22, throttle * 0.25) : 0;
+    pl.disc.material.opacity = speedMs > 8 ? Math.min(0.3, throttle * 0.32) : 0;
     // gear: rotate legs up when retracted (simple scale-fade + tuck)
     var target = state.gearDown ? 0 : 1;
     pl.gear.position.y = lerp(pl.gear.position.y, target * 0.85, Math.min(1, dt * 3));

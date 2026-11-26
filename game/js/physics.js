@@ -47,7 +47,12 @@
       }
     }
     // Flatten ground near runways so the strip is landable: fully flat
-    // across the strip itself, fading out over a 70 m apron.
+    // across the strip itself. Past each runway end, carve a clear
+    // corridor DOWN to a gentle valley (fade over clearAlong metres
+    // along the axis, clearAcross across it) so the runway never ends
+    // in a mountainside. Low ground is never raised: the carve only
+    // lowers terrain that stands above the runway, so the sea and the
+    // shore stay where they are and no causeway is built into the water.
     for (var k in C.AIRFIELDS) {
       var f = C.AIRFIELDS[k];
       var hd = f.headingDeg * Math.PI / 180;
@@ -56,9 +61,17 @@
       var along = rx * lx + rz * lz;
       var across = -rx * lz + rz * lx;
       var aL = Math.abs(along), aW = Math.abs(across);
-      var tL = aL <= f.length / 2 ? 1 : smooth(clamp(1 - (aL - f.length / 2) / 70, 0, 1));
-      var tW = aW <= f.width / 2 ? 1 : smooth(clamp(1 - (aW - f.width / 2) / 70, 0, 1));
-      h = lerp(h, f.elev, tL * tW);
+      if (aL <= f.length / 2 && aW <= f.width / 2) { h = f.elev; continue; }
+      var fadeL = f.clearAlong || 70, fadeW = f.clearAcross || 70;
+      // Along the axis the corridor stays FULLY flat for the first 75% of
+      // the clear zone, then fades to natural ground over the last 25%:
+      // a runway end must read as a flat plain running on, not as a slope
+      // that starts climbing right past the threshold.
+      var beyond = aL - f.length / 2;
+      var tL = beyond <= 0 ? 1 : smooth(clamp((fadeL - beyond) / (fadeL * 0.25), 0, 1));
+      var tW = aW <= f.width / 2 ? 1 : smooth(clamp(1 - (aW - f.width / 2) / fadeW, 0, 1));
+      var flat = lerp(h, f.elev, tL * tW);
+      h = Math.min(h, flat);
     }
     return h;
   }
@@ -248,7 +261,7 @@
   }
 
   var api = {
-    clamp: clamp, lerp: lerp, terrainHeight: terrainHeight,
+    clamp: clamp, lerp: lerp, terrainHeight: terrainHeight, vnoise: vnoise,
     makeState: makeState, update: update,
     landingQuality: landingQuality, nearestField: nearestField,
   };

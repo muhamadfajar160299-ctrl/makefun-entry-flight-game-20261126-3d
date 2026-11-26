@@ -35,6 +35,26 @@
     });
   }
 
+  // Fine grayscale speckle used as a bump map: gives the ocean a
+  // glittering sun path and the terrain a grainy HD surface without
+  // any extra geometry or network fetch.
+  function noiseBumpTexture(seed, specks, base) {
+    return canvasTexture(256, 256, function (g, w, h) {
+      g.fillStyle = base; g.fillRect(0, 0, w, h);
+      var rnd = mulberry32(seed);
+      for (var i = 0; i < specks; i++) {
+        var v = 96 + ((rnd() * 96) | 0);
+        g.fillStyle = "rgba(" + v + "," + v + "," + v + ",0.5)";
+        g.beginPath(); g.arc(rnd() * w, rnd() * h, 1 + rnd() * 3.2, 0, Math.PI * 2); g.fill();
+      }
+      for (var j = 0; j < 240; j++) {
+        var v2 = 110 + ((rnd() * 60) | 0);
+        g.fillStyle = "rgba(" + v2 + "," + v2 + "," + v2 + ",0.35)";
+        g.beginPath(); g.arc(rnd() * w, rnd() * h, 2 + rnd() * 6, 0, Math.PI * 2); g.fill();
+      }
+    });
+  }
+
   function cloudTexture() {
     return canvasTexture(256, 128, function (g) {
       g.clearRect(0, 0, 256, 128);
@@ -71,8 +91,9 @@
         " vec3 col = mix(hor, mid, smoothstep(0.0, 0.22, h));" +
         " col = mix(col, zen, smoothstep(0.18, 0.75, h));" +
         " float s = max(dot(normalize(vDir), sunDir), 0.0);" +
-        " col += vec3(1.0, 0.62, 0.25) * pow(s, 220.0) * 3.0;" +
-        " col += vec3(1.0, 0.55, 0.20) * pow(s, 7.0) * 0.38;" +
+        " col += vec3(1.0, 0.66, 0.30) * pow(s, 900.0) * 2.4;" +
+        " col += vec3(1.0, 0.58, 0.22) * pow(s, 42.0) * 0.42;" +
+        " col += vec3(1.0, 0.55, 0.20) * pow(s, 7.0) * 0.30;" +
         " col = mix(col, vec3(0.36, 0.32, 0.30), smoothstep(-0.02, -0.08, vDir.y));" +
         " gl_FragColor = vec4(col, 1.0); }",
     });
@@ -98,18 +119,25 @@
     var segs = quality === "low" ? 48 : 96;
     var geo = new THREE.PlaneGeometry(4400, 4400, segs, segs);
     geo.rotateX(-Math.PI / 2);
+    var bump = noiseBumpTexture(7, 5200, "#808080");
+    bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+    bump.repeat.set(56, 56);
     var mat = new THREE.MeshPhongMaterial({
-      color: 0x0e4a66, specular: 0xffc98a, shininess: 160,
+      color: 0x0d4258, specular: 0xffbe78, shininess: 220,
+      bumpMap: bump, bumpScale: 0.9,
     });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = 0;
     mesh.receiveShadow = true;
     scene.add(mesh);
     var base = geo.attributes.position.array.slice();
-    return { mesh: mesh, geo: geo, base: base };
+    return { mesh: mesh, geo: geo, base: base, bump: bump };
   }
 
   function updateOcean(o, t, quality) {
+    // slow drift of the micro-detail so the sun glitter shimmers
+    o.bump.offset.x = (t * 0.008) % 1;
+    o.bump.offset.y = (t * 0.005) % 1;
     var pos = o.geo.attributes.position;
     var arr = pos.array, base = o.base;
     for (var i = 0; i < arr.length; i += 3) {
@@ -125,8 +153,9 @@
   }
 
   // ---- terrain ------------------------------------------------------------------
-  function terrainColor(h, slope, n) {
-    // returns [r,g,b] 0..1
+  function terrainColor(h, slope, n, patch) {
+    // returns [r,g,b] 0..1; patch is smooth 0..1 value noise so grass /
+    // meadow / forest blend in patches instead of per-vertex static
     var sand = [0.86, 0.76, 0.54], grass = [0.42, 0.60, 0.30],
       meadow = [0.55, 0.66, 0.34], forest = [0.16, 0.34, 0.18],
       rock = [0.45, 0.40, 0.36], deep = [0.05, 0.23, 0.28],
@@ -135,17 +164,17 @@
     if (h < -1) c = deep;
     else if (h < 1.2) c = shallow;
     else if (h < 3.5) c = sand;
-    else if (h < 26) c = Math.random() < 0.5 ? grass : meadow;
-    else if (h < 70) c = grass;
+    else if (h < 26) c = patch > 0.5 ? meadow : grass;
+    else if (h < 70) c = patch > 0.62 ? forest : grass;
     else if (h < 118) c = forest;
     else c = rock;
     if (slope > 0.55 && h > 3.5) c = rock;
-    var v = 0.92 + n * 0.16;
+    var v = 0.92 + n * 0.16 + (patch - 0.5) * 0.1;
     return [c[0] * v, c[1] * v, c[2] * v];
   }
 
   function buildTerrain(scene, C, phys, quality) {
-    var size = C.WORLD_SIZE, seg = quality === "low" ? 130 : 160;
+    var size = C.WORLD_SIZE, seg = quality === "low" ? 130 : 200;
     var geo = new THREE.PlaneGeometry(size, size, seg, seg);
     geo.rotateX(-Math.PI / 2);
     var pos = geo.attributes.position;
@@ -159,12 +188,16 @@
       var hx = phys.terrainHeight(x + 6, z, C) - phys.terrainHeight(x - 6, z, C);
       var hz = phys.terrainHeight(x, z + 6, C) - phys.terrainHeight(x, z - 6, C);
       var slope = Math.sqrt(hx * hx + hz * hz) / 12;
-      var col = terrainColor(h, slope, rnd());
+      var patch = phys.vnoise(x * 0.01, z * 0.01, 5) * 0.5 + 0.5;
+      var col = terrainColor(h, slope, rnd(), patch);
       colors[i * 3] = col[0]; colors[i * 3 + 1] = col[1]; colors[i * 3 + 2] = col[2];
     }
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
-    var mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    var detail = noiseBumpTexture(31, 9000, "#ededed");
+    detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+    detail.repeat.set(170, 170);
+    var mat = new THREE.MeshStandardMaterial({ map: detail, vertexColors: true, roughness: 0.95, metalness: 0 });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     scene.add(mesh);
@@ -173,38 +206,83 @@
 
   function buildTrees(scene, C, phys) {
     var rnd = mulberry32(4242);
-    var spots = [];
-    var tries = 0;
-    while (spots.length < 650 && tries < 9000) {
-      tries++;
-      var x = (rnd() - 0.5) * C.WORLD_SIZE, z = (rnd() - 0.5) * C.WORLD_SIZE;
-      var h = phys.terrainHeight(x, z, C);
-      if (h < 9 || h > 112) continue;
-      var nearStrip = false;
+    // Keep the approach/departure corridors clear: nothing may grow
+    // inside the flattened valley around a runway, or near the strip.
+    function inClearZone(x, z) {
       for (var k in C.AIRFIELDS) {
         var f = C.AIRFIELDS[k];
-        if (Math.hypot(x - f.x, z - f.z) < f.length * 0.75) { nearStrip = true; break; }
+        if (Math.hypot(x - f.x, z - f.z) < f.length * 0.75) return true;
+        var hd = f.headingDeg * Math.PI / 180;
+        var lx = Math.sin(hd), lz = -Math.cos(hd);
+        var along = Math.abs((x - f.x) * lx + (z - f.z) * lz);
+        var across = Math.abs(-(x - f.x) * lz + (z - f.z) * lx);
+        if (along < f.length / 2 + (f.clearAlong || 70) + 40 && across < 70) return true;
       }
-      if (nearStrip) continue;
-      spots.push([x, h, z, 0.7 + rnd() * 0.9]);
+      return false;
+    }
+    function goodSpot(x, z) {
+      var h = phys.terrainHeight(x, z, C);
+      if (h < 9 || h > 112) return -1;
+      if (inClearZone(x, z)) return -1;
+      return h;
+    }
+    var spots = []; // [x, h, z, scale, broadleaf?]
+    // forest clusters: trees grow in groves, not evenly scattered
+    var clusters = 0, tries = 0;
+    while (clusters < 14 && tries < 3000) {
+      tries++;
+      var cx = (rnd() - 0.5) * C.WORLD_SIZE, cz = (rnd() - 0.5) * C.WORLD_SIZE;
+      if (goodSpot(cx, cz) < 0) continue;
+      clusters++;
+      var n = 26 + ((rnd() * 26) | 0);
+      for (var j = 0; j < n; j++) {
+        var x = cx + (rnd() - 0.5) * 150, z = cz + (rnd() - 0.5) * 150;
+        var h = goodSpot(x, z);
+        if (h < 0) continue;
+        spots.push([x, h, z, 0.7 + rnd() * 1.1, rnd() < 0.35]);
+      }
+    }
+    // scattered singles to fill the gaps
+    tries = 0;
+    while (spots.length < 720 && tries < 9000) {
+      tries++;
+      var sx = (rnd() - 0.5) * C.WORLD_SIZE, sz = (rnd() - 0.5) * C.WORLD_SIZE;
+      var sh = goodSpot(sx, sz);
+      if (sh < 0) continue;
+      spots.push([sx, sh, sz, 0.7 + rnd() * 1.1, rnd() < 0.35]);
     }
     var trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 2.6, 5);
     var trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4128, roughness: 1 });
-    var leafGeo = new THREE.ConeGeometry(2.3, 6.5, 6);
-    var leafMat = new THREE.MeshStandardMaterial({ color: 0x1e4d24, roughness: 1 });
+    var pineGeo = new THREE.ConeGeometry(2.3, 6.5, 6);
+    var pineMat = new THREE.MeshStandardMaterial({ color: 0x1e4d24, roughness: 1 });
+    var broadGeo = new THREE.SphereGeometry(2.6, 8, 6);
+    var broadMat = new THREE.MeshStandardMaterial({ color: 0x2f6b2a, roughness: 1 });
+    var pines = spots.filter(function (sp) { return !sp[4]; });
+    var broads = spots.filter(function (sp) { return sp[4]; });
     var trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
-    var leaves = new THREE.InstancedMesh(leafGeo, leafMat, spots.length);
+    var pineMesh = new THREE.InstancedMesh(pineGeo, pineMat, Math.max(pines.length, 1));
+    var broadMesh = new THREE.InstancedMesh(broadGeo, broadMat, Math.max(broads.length, 1));
     var m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+    var up = new THREE.Vector3(0, 1, 0);
+    function place(mesh, idx, x, y, z, sc, sy) {
+      p.set(x, y, z); s.set(sc, sy, sc);
+      q.setFromAxisAngle(up, rnd() * Math.PI * 2);
+      m.compose(p, q, s); mesh.setMatrixAt(idx, m);
+    }
     for (var i = 0; i < spots.length; i++) {
       var sp = spots[i];
-      p.set(sp[0], sp[1] + 1.3 * sp[3], sp[2]); s.set(sp[3], sp[3], sp[3]);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * Math.PI * 2);
-      m.compose(p, q, s); trunks.setMatrixAt(i, m);
-      p.set(sp[0], sp[1] + (2.6 + 2.6) * sp[3], sp[2]);
-      m.compose(p, q, s); leaves.setMatrixAt(i, m);
+      place(trunks, i, sp[0], sp[1] + 1.3 * sp[3], sp[2], sp[3], sp[3]);
     }
-    trunks.castShadow = true; leaves.castShadow = true;
-    scene.add(trunks); scene.add(leaves);
+    for (var a = 0; a < pines.length; a++) {
+      var pa = pines[a];
+      place(pineMesh, a, pa[0], pa[1] + 5.2 * pa[3], pa[2], pa[3], pa[3]);
+    }
+    for (var b = 0; b < broads.length; b++) {
+      var ba = broads[b];
+      place(broadMesh, b, ba[0], ba[1] + 4.6 * ba[3], ba[2], ba[3], ba[3] * 0.85);
+    }
+    trunks.castShadow = true; pineMesh.castShadow = true; broadMesh.castShadow = true;
+    scene.add(trunks); scene.add(pineMesh); scene.add(broadMesh);
     return spots.length;
   }
 
@@ -340,8 +418,8 @@
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(t.x, 0.7, t.z);
       group.add(ring);
-      var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: blob, color: 0xff9540, transparent: true, opacity: 0.35, depthWrite: false }));
-      glow.scale.set(46, 46, 1);
+      var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: blob, color: 0xff9540, transparent: true, opacity: 0.25, depthWrite: false }));
+      glow.scale.set(34, 34, 1);
       glow.position.set(t.x, 1.2, t.z);
       group.add(glow);
       targets.push({ ring: ring, glow: glow });
@@ -373,17 +451,17 @@
       torus.castShadow = true;
       g.add(torus);
       var glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: blob, color: 0xffc94d, transparent: true, opacity: 0.4,
+        map: blob, color: 0xffc94d, transparent: true, opacity: 0.2,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }));
-      glow.scale.set(r.r * 2.4, r.r * 2.4, 1);
+      glow.scale.set(r.r * 1.7, r.r * 1.7, 1);
       g.add(glow);
       g.position.set(r.x, r.y, r.z);
       // face the incoming course: look at the previous point (or the start)
       var prev = i === 0 ? C.AIRFIELDS.halcyon : C.RINGS[i - 1];
       g.lookAt(prev.x, prev.y, prev.z);
       scene.add(g);
-      rings.push({ group: g, torus: torus, glow: glow, passed: false, baseOp: 0.4 });
+      rings.push({ group: g, torus: torus, glow: glow, passed: false, baseOp: 0.2 });
     }
     return rings;
   }
@@ -394,7 +472,7 @@
     var clouds = [];
     var rnd = mulberry32(31337);
     for (var i = 0; i < 36; i++) {
-      var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.28 + rnd() * 0.25, depthWrite: false }));
+      var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: 0xfff0dd, transparent: true, opacity: 0.2 + rnd() * 0.2, depthWrite: false }));
       var s = 100 + rnd() * 160;
       sp.scale.set(s, s * 0.5, 1);
       sp.position.set((rnd() - 0.5) * 3800, 280 + rnd() * 160, (rnd() - 0.5) * 3800);
@@ -434,8 +512,10 @@
     var col = new Float32Array(MAX * 3);
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    // soft round sparks (not hard squares): a burst must read as golden
+    // glitter, never as a white blob hiding the plane
     var mat = new THREE.PointsMaterial({
-      size: 2.4, vertexColors: true, transparent: true, opacity: 0.95,
+      size: 1.1, map: softBlobTexture(), vertexColors: true, transparent: true, opacity: 0.9,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     });
     var points = new THREE.Points(geo, mat);

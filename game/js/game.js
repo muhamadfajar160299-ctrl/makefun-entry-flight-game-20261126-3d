@@ -20,6 +20,11 @@
 
   function makeGame() {
     var canvas = $("scene");
+    // ?hq=1 forces full quality (screenshot capture): software
+    // rasterizers normally get a lighter load so the game still runs,
+    // but a still capture can afford the slow frames.
+    var forceHQ = false;
+    try { forceHQ = new URLSearchParams(window.location.search).get("hq") === "1"; } catch (e) { forceHQ = false; }
     // Adaptive quality: software rasterizers (SwiftShader/llvmpipe) get a
     // lighter load so the game still runs; real GPUs get full quality.
     var softwareGL = false;
@@ -32,13 +37,13 @@
     } catch (e) { softwareGL = false; }
     var renderer = null;
     try {
-      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: !softwareGL });
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: forceHQ || !softwareGL });
     } catch (e) {
       $("nogl").classList.remove("hidden");
       $("menu").classList.add("hidden");
       return null;
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, softwareGL ? 1 : 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, forceHQ ? 2 : (softwareGL ? 1 : 1.5)));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputEncoding = THREE.sRGBEncoding;
@@ -47,8 +52,8 @@
 
     var scene = new THREE.Scene();
     var camera = new THREE.PerspectiveCamera(62, 1, 0.5, 8000);
-    var world = SkylaneWorld.build(scene, C, Phys, softwareGL ? "low" : "high");
-    var quality = softwareGL ? "low" : "high";
+    var world = SkylaneWorld.build(scene, C, Phys, forceHQ ? "high" : (softwareGL ? "low" : "high"));
+    var quality = forceHQ ? "high" : (softwareGL ? "low" : "high");
     var planeObj = SkylanePlane.buildPlane();
     scene.add(planeObj.group);
     scene.add(planeObj.trailL.line);
@@ -348,7 +353,13 @@
 
     // ---- cameras ---------------------------------------------------------------
     var tmpV = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpU = new THREE.Vector3();
-    function updateCamera(dt) {
+    function updateCamera(dt, rawDt) {
+      // Camera smoothing must keep up with the plane even when the frame
+      // rate collapses (software rendering): the physics advances up to
+      // 0.5 s of game per rendered frame, so lerping on the clamped
+      // visual step (0.06 s) leaves the look target behind the camera
+      // and the plane falls out of view. Use the real frame time here.
+      var ldt = Math.min(rawDt || dt, 0.25);
       var e = new THREE.Euler(s.pitch, -s.heading, -s.roll, "YXZ");
       var quat = new THREE.Quaternion().setFromEuler(e);
       planeObj.group.quaternion.copy(quat);
@@ -360,26 +371,38 @@
         camera.position.copy(tmpV);
         tmpV.copy(tmpF).multiplyScalar(30).add(camera.position);
         camera.lookAt(tmpV);
-        camera.fov = lerp(camera.fov, 66, dt * 4);
+        camera.fov = lerp(camera.fov, 66, ldt * 4);
       } else {
-        // chase: behind and above, roll damped, look offset for mouse look
-        var back = 11 + s.speed * 0.04, up = 3.2 + s.speed * 0.008;
+        // chase: behind and above, roll damped, look offset for mouse look.
+        // The cover staging keeps the camera glued and pulled back so the
+        // plane reads big AND the ring it just threaded still frames it
+        // (a tight chase loses the ring the moment the plane passes it).
+        var tight = game.staging === "cover";
+        var back = tight ? 26 : 11 + s.speed * 0.04, up = tight ? 5 : 3.2 + s.speed * 0.008;
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(0, up, back).applyQuaternion(q2).add(planeObj.group.position);
-        var k = 1 - Math.exp(-dt * 8);
+        var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
         camPos.lerp(tmpV, k);
         camera.position.copy(camPos);
-        tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 14);
-        tmpV.y += 1.2;
+        // cover: aim at the plane itself so it stays centred even while
+        // the autopilot pitches up for the next ring; normal chase looks
+        // 14 m ahead down the flight path
+        if (tight) {
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 16);
+          tmpV.y += 0.5;
+        } else {
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 14);
+          tmpV.y += 1.2;
+        }
         // mouse look: swing the look target sideways/up
         var right = new THREE.Vector3().crossVectors(tmpF, tmpU).normalize();
         tmpV.addScaledVector(right, game.lookYaw * 26);
         tmpV.y += game.lookPitch * 14;
-        var k2 = 1 - Math.exp(-dt * 7);
+        var k2 = 1 - Math.exp(-ldt * 7);
         camLook.lerp(tmpV, k2);
         camera.lookAt(camLook);
         var wantFov = 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
-        camera.fov = lerp(camera.fov, wantFov, dt * 3);
+        camera.fov = lerp(camera.fov, wantFov, ldt * 3);
       }
       camera.updateProjectionMatrix();
     }
@@ -420,6 +443,21 @@
           if (s.crashed) break;
         }
         if (n >= 60) acc = 0;
+        // Cover staging: freeze the instant the plane is ~50 m out from
+        // ring 4 (ringsHit still 3) so a screenshot can frame plane +
+        // ring + sun with zero timing jitter. At ~0.3 fps the capture
+        // script cannot time this from outside — the plane crosses 100 m
+        // between two polls. The freeze pauses physics only (the scene
+        // keeps rendering); the capture unfreezes by setting state back
+        // to "flying". No pause panel appears (state is set directly).
+        if (game.staging === "cover" && !game.coverPreFrozen && game.mission && game.mission.ringsHit === 3) {
+          var r4 = C.RINGS[3];
+          var fdx = s.x - r4.x, fdy = s.y - r4.y, fdz = s.z - r4.z;
+          if (fdx * fdx + fdy * fdy + fdz * fdz < 60 * 60) {
+            game.coverPreFrozen = true;
+            game.state = "paused";
+          }
+        }
         syncCrates(game.mission);
         // spray when skimming the sea
         sprayTimer -= visDt;
@@ -441,7 +479,7 @@
         var rw = new THREE.Vector3(3.9, 0.05, -0.35).applyQuaternion(q).add(planeObj.group.position);
         SkylanePlane.pushTrail(planeObj.trailL, lw.x, lw.y, lw.z);
         SkylanePlane.pushTrail(planeObj.trailR, rw.x, rw.y, rw.z);
-        updateCamera(visDt);
+        updateCamera(visDt, rawDt);
         var tgt = game.mission ? Missions.currentTarget(C, game.mission) : null;
         hud.update(s, game.mission, tgt, visDt);
       } else if (game.state === "menu") {
@@ -485,7 +523,7 @@
             r.passed = true;
             r.glow.material.opacity = 0.12;
             r.torus.material.emissiveIntensity = 0.7; // dimmed but still gold
-            world.particles.burst(r.group.position.x, r.group.position.y, r.group.position.z, 60, [1.0, 0.8, 0.25], 12, 0.4);
+            world.particles.burst(r.group.position.x, r.group.position.y, r.group.position.z, 36, [0.95, 0.72, 0.2], 15, 0.4);
           }
           audio.ring();
         } else if (e.type === "crate-hit") {
@@ -501,6 +539,7 @@
       game: game,
       renderer: renderer,
       scene: scene,
+      camera: camera,
       world: world,
       quality: quality,
       get state() { return s; },

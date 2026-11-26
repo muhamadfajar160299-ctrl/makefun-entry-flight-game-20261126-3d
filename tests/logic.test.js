@@ -30,6 +30,13 @@ const hr = Phys.terrainHeight(-40, -60, C);
 check("runway area near elev 26", Math.abs(hr - 26) < 6, hr.toFixed(1));
 const hr2 = Phys.terrainHeight(-40 + 150, -60, C);
 check("runway along strip stays flat", Math.abs(hr2 - 26) < 6, hr2.toFixed(1));
+// clear corridor: 100 m past the west threshold the valley floor is
+// carved well below the mountain that used to end the runway...
+const hClearW = Phys.terrainHeight(-40 - 215 - 100, -60, C);
+check("runway west clear zone stays low", hClearW < 60, hClearW.toFixed(1));
+// ...while the sea east of the strip is never raised into a causeway
+const hClearE = Phys.terrainHeight(-40 + 215 + 165, -60, C);
+check("sea east of runway stays sea", hClearE < 10, hClearE.toFixed(1));
 
 // ---- takeoff: 0 -> 60 kt ------------------------------------------------------
 function simTakeoff() {

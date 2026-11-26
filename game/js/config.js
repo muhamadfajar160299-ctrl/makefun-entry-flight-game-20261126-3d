@@ -11,10 +11,12 @@
   C.SEA_LEVEL = 0;
   C.PEAK_HEIGHT = 155;          // highest terrain, main island
   C.FOG_COLOR = 0xf2c98f;       // warm golden-hour haze
-  C.FOG_NEAR = 700;
-  C.FOG_FAR = 3400;
+  C.FOG_NEAR = 900;
+  C.FOG_FAR = 4200;
   C.SUN_ELEVATION = 0.24;       // low golden-hour sun (~14 deg)
-  C.SUN_AZIMUTH = -2.25;        // sun low in the west-southwest
+  C.SUN_AZIMUTH = -2.6;         // sun low in the west-northwest: ~20 deg
+                                // off the ring 3->4 leg, so the plane is
+                                // lit from the side instead of backlit
   C.SUN_COLOR = 0xffd9a3;
   C.SUN_INTENSITY = 1.35;
   C.HEMI_SKY = 0x9fc4e8;
@@ -32,16 +34,22 @@
 
   // ---- airfields -----------------------------------------------------------
   // Runways are flattened into the terrain. headingDeg: runway direction.
+  // clearAlong/clearAcross: the obstacle-free corridor past each runway
+  // end (metres). The terrain is carved DOWN to a gentle valley along
+  // this corridor, so a runway never ends in a mountainside; low ground
+  // (sea, shore) is left alone, never raised.
   C.AIRFIELDS = {
     halcyon: {
       name: "Halcyon Field", code: "HAL",
       x: -40, z: -60, elev: 26, headingDeg: 90,
       length: 430, width: 26, surface: "asphalt",
+      clearAlong: 480, clearAcross: 220,
     },
     northCay: {
       name: "North Cay Strip", code: "NCY",
       x: 780, z: 560, elev: 18, headingDeg: 0,
       length: 330, width: 20, surface: "grass",
+      clearAlong: 300, clearAcross: 180,
     },
   };
 
