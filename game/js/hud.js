@@ -57,6 +57,10 @@
 
   function makeHud(C) {
     buildTape();
+    // wind readout under the objective: same wind the windsock
+    // streams in, straight from the config
+    var windEl = $("hud-wind");
+    if (windEl && C.WIND) windEl.textContent = "WIND " + C.WIND.fromDeg + "° · " + C.WIND.speedKt + " KT";
     var tapeInner = $("tape-inner");
     var att = $("att-canvas");
     var attCtx = att ? att.getContext("2d") : null;

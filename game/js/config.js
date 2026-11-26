@@ -53,6 +53,16 @@
     },
   };
 
+  // Wind: steady sea breeze from the west, so runway 27 is the
+  // into-wind runway and the windsock streams east, matching the
+  // WIND readout on the HUD.
+  C.WIND = { fromDeg: 270, speedKt: 8 };
+
+  // Graded apron pad south of Halcyon runway: taxiway, apron,
+  // terminal and hangar all sit on ground flattened to field
+  // elevation (see physics.terrainHeight).
+  C.APRON = { x: -40, z: 19, hw: 210, hl: 69, elev: 26 };
+
   // Harbor (crate targets): open water on the south shore of Halcyon.
   C.HARBOR = { x: -120, z: 560, targetR: 26 };
   C.HARBOR_TARGETS = [

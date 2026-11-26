@@ -37,6 +37,17 @@ check("runway west clear zone stays low", hClearW < 60, hClearW.toFixed(1));
 // ...while the sea east of the strip is never raised into a causeway
 const hClearE = Phys.terrainHeight(-40 + 215 + 165, -60, C);
 check("sea east of runway stays sea", hClearE < 10, hClearE.toFixed(1));
+// apron pad (v3): the graded taxiway / apron / terminal pad south of
+// Halcyon runway sits at field elevation, and the ground just south
+// of the pad is left natural
+const hApronC = Phys.terrainHeight(-90, 30, C);
+check("apron pad centre near field elev", Math.abs(hApronC - 26) < 1, hApronC.toFixed(1));
+const hApronW = Phys.terrainHeight(-210, 30, C);
+check("apron pad west end near field elev", Math.abs(hApronW - 26) < 1, hApronW.toFixed(1));
+const hApronE = Phys.terrainHeight(30, 40, C);
+check("apron pad east end near field elev", Math.abs(hApronE - 26) < 1, hApronE.toFixed(1));
+const hSouthPad = Phys.terrainHeight(-40, 130, C);
+check("ground south of pad stays natural", hSouthPad > 40, hSouthPad.toFixed(1));
 
 // ---- takeoff: 0 -> 60 kt ------------------------------------------------------
 function simTakeoff() {

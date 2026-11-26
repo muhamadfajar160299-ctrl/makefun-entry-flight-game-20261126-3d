@@ -183,10 +183,10 @@
     if (d > 750 || h < 3.5 || h > 70) return null;
     var bx = Math.floor(x / 120), bz = Math.floor(z / 120);
     var hh = Math.abs(Math.sin(bx * 12.9898 + bz * 78.233) * 43758.5453) % 1;
-    if (hh < 0.20) return [0.80, 0.64, 0.30]; // wheat — the tan accent
-    if (hh < 0.50) return [0.42, 0.60, 0.28]; // meadow green
-    if (hh < 0.75) return [0.22, 0.42, 0.18]; // dark pasture
-    return [0.52, 0.66, 0.32]; // light green
+    if (hh < 0.20) return [0.88, 0.68, 0.26]; // wheat — the tan accent
+    if (hh < 0.50) return [0.36, 0.58, 0.24]; // meadow green
+    if (hh < 0.75) return [0.14, 0.34, 0.12]; // dark pasture
+    return [0.58, 0.72, 0.32]; // light green
   }
 
   function buildTerrain(scene, C, phys, quality) {
@@ -315,6 +315,21 @@
       for (var i = 0; i < 40; i++) g.fillRect(0, i * 26, w, 2);
       g.fillStyle = "#f2f2ea";
       for (var y = 60; y < h - 60; y += 86) g.fillRect(w / 2 - 5, y, 10, 44);
+      // runway edge lines: solid white stripes down both sides
+      g.fillRect(10, 0, 5, h);
+      g.fillRect(w - 15, 0, 5, h);
+      // aiming-point bars + touchdown-zone pairs, mirrored at both
+      // ends so the strip reads from either direction: the aiming
+      // bars sit ~130 m past each threshold, the TDZ pair steps on
+      // from there toward midfield (kept clear of the numbers)
+      for (var e = 0; e < 2; e++) {
+        var ay = e === 0 ? h * 0.30 : h * 0.70 - 46;
+        g.fillRect(w / 2 - 66, ay, 48, 46);
+        g.fillRect(w / 2 + 18, ay, 48, 46);
+        var ty = e === 0 ? h * 0.41 : h * 0.59 - 40;
+        g.fillRect(w / 2 - 52, ty, 34, 40);
+        g.fillRect(w / 2 + 18, ty, 34, 40);
+      }
       // threshold bars
       for (var b = 0; b < 4; b++) {
         g.fillRect(24 + b * 56, 26, 34, 12);
@@ -327,7 +342,111 @@
     });
   }
 
-  function buildAirfield(scene, C, f, codeA, codeB) {
+  // Taxiway: dark asphalt with a dashed yellow centreline.
+  function taxiwayTexture() {
+    return canvasTexture(64, 1024, function (g, w, h) {
+      g.fillStyle = "#34373d"; g.fillRect(0, 0, w, h);
+      g.fillStyle = "#3c4046";
+      for (var i = 0; i < 40; i++) g.fillRect(0, i * 26, w, 2);
+      g.fillStyle = "#e8c33a";
+      for (var y = 30; y < h - 30; y += 84) g.fillRect(w / 2 - 3, y, 6, 44);
+      g.fillStyle = "rgba(232,195,58,0.55)";
+      g.fillRect(5, 0, 2, h);
+      g.fillRect(w - 7, 0, 2, h);
+    });
+  }
+
+  // Connector taxiway: asphalt with the holding-short marking
+  // (two solid + two dashed yellow bars across the taxiway) near
+  // the runway end — canvas top is the runway (north) end.
+  function connectorTexture() {
+    return canvasTexture(64, 256, function (g, w, h) {
+      g.fillStyle = "#34373d"; g.fillRect(0, 0, w, h);
+      g.fillStyle = "#e8c33a";
+      g.fillRect(w / 2 - 3, 80, 6, h - 80);
+      g.fillRect(6, 26, w - 12, 6);
+      g.fillRect(6, 38, w - 12, 6);
+      for (var x = 6; x < w - 12; x += 18) g.fillRect(x, 52, 10, 6);
+      for (var x2 = 6; x2 < w - 12; x2 += 18) g.fillRect(x2, 64, 10, 6);
+    });
+  }
+
+  // Apron: pale concrete with expansion-joint grid lines.
+  function apronTexture() {
+    return canvasTexture(256, 128, function (g, w, h) {
+      g.fillStyle = "#767c83"; g.fillRect(0, 0, w, h);
+      var rnd = mulberry32(55);
+      for (var i = 0; i < 500; i++) {
+        var v = 100 + ((rnd() * 40) | 0);
+        g.fillStyle = "rgba(" + v + "," + v + "," + (v + 4) + ",0.25)";
+        g.fillRect(rnd() * w, rnd() * h, 2 + rnd() * 4, 2 + rnd() * 4);
+      }
+      g.fillStyle = "rgba(40,44,48,0.55)";
+      for (var gx = 0; gx <= w; gx += 32) g.fillRect(gx, 0, 2, h);
+      for (var gy = 0; gy <= h; gy += 32) g.fillRect(0, gy, w, 2);
+    });
+  }
+
+  // Windsock: orange / white bands along its length.
+  function windsockTexture() {
+    return canvasTexture(64, 128, function (g, w, h) {
+      for (var b = 0; b < 5; b++) {
+        g.fillStyle = b % 2 ? "#f2ede2" : "#ff7a1a";
+        g.fillRect(0, b * h / 5, w, h / 5 + 1);
+      }
+    });
+  }
+
+  // Simple parked aircraft: fuselage, nose, canopy, wings, tail and
+  // a static prop — a fraction of the flyable Kestrel, enough to
+  // read as a parked plane from the runway and the air.
+  function buildParkedPlane(colorBody, colorTrim) {
+    var g = new THREE.Group();
+    var bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.45, metalness: 0.25 });
+    var trimMat = new THREE.MeshStandardMaterial({ color: colorTrim, roughness: 0.4, metalness: 0.35 });
+    var glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd4e8, roughness: 0.08, metalness: 0.4 });
+    var darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 });
+    var body = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.45, 4.2, 12), bodyMat);
+    body.rotation.x = Math.PI / 2; body.position.y = 0.95; body.castShadow = true;
+    g.add(body);
+    var nose = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), bodyMat);
+    nose.scale.set(0.95, 0.8, 1.3); nose.position.set(0, 0.9, -2.2);
+    g.add(nose);
+    var canopy = new THREE.Mesh(new THREE.SphereGeometry(0.46, 12, 10), glassMat);
+    canopy.scale.set(0.9, 0.7, 1.4); canopy.position.set(0, 1.4, -0.6);
+    g.add(canopy);
+    var wing = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.12, 1.2), bodyMat);
+    wing.position.set(0, 0.95, -0.3); wing.castShadow = true;
+    g.add(wing);
+    var tipL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 1.1), trimMat);
+    tipL.position.set(-3.65, 0.95, -0.3);
+    g.add(tipL);
+    var tipR = tipL.clone(); tipR.position.x = 3.65;
+    g.add(tipR);
+    var stab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 0.7), trimMat);
+    stab.position.set(0, 1.05, 1.9);
+    g.add(stab);
+    var fin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 1.0), trimMat);
+    fin.position.set(0, 1.5, 1.95);
+    g.add(fin);
+    var prop = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.3, 0.06), darkMat);
+    prop.position.set(0, 0.95, -2.85);
+    g.add(prop);
+    var legMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.4, metalness: 0.7 });
+    var tyreMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.9 });
+    [[-0.5, -0.4], [0.5, -0.4], [0, -1.7]].forEach(function (p) {
+      var leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.6, 6), legMat);
+      leg.position.set(p[0], 0.3, p[1]);
+      g.add(leg);
+      var tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.16, 10), tyreMat);
+      tyre.rotation.z = Math.PI / 2;
+      tyre.position.set(p[0], 0.24, p[1]);
+      g.add(tyre);
+    });
+    return g;
+  }
+
+  function buildAirfield(scene, C, f, codeA, codeB, phys) {
     var group = new THREE.Group();
     var hd = f.headingDeg * Math.PI / 180;
     var tex = runwayTexture(codeA, codeB);
@@ -350,25 +469,186 @@
         group.add(dot);
       }
     }
-    // windsock
-    var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 7, 6),
+    // ---- Halcyon airport complex: PAPI, taxiway, apron, terminal -----
+    if (f.code === "HAL") {
+      var blobTex = softBlobTexture();
+      // PAPI: four light units in a row perpendicular to the runway,
+      // beside the touchdown zone on the north side — two white
+      // (near the runway) + two red (far): the on-glidepath picture,
+      // so the approach reads as a real airport. Each unit sits on
+      // its own sampled ground height and carries a glow sprite so
+      // the row reads from 300 m out.
+      for (var pi = 0; pi < 4; pi++) {
+        var pz = f.z - (f.width / 2 + 9 + pi * 9);
+        var px = f.x + 55;
+        var py = phys ? phys.terrainHeight(px, pz, C) : f.elev;
+        var isWhite = pi < 2;
+        var lensCol = isWhite ? 0xfff2cc : 0xff2a1a;
+        var housing = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.0, 1.0),
+          new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.6, metalness: 0.4 }));
+        housing.position.set(px, py + 0.55, pz);
+        housing.castShadow = true;
+        group.add(housing);
+        var lens = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8),
+          new THREE.MeshStandardMaterial({ color: lensCol, emissive: lensCol, emissiveIntensity: 2.4 }));
+        lens.position.set(px + 0.8, py + 0.6, pz);
+        group.add(lens);
+        var papiGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: blobTex, color: lensCol, transparent: true, opacity: 0.55,
+          blending: THREE.AdditiveBlending, depthWrite: false }));
+        papiGlow.scale.set(5, 5, 1);
+        papiGlow.position.set(px + 0.9, py + 0.6, pz);
+        group.add(papiGlow);
+      }
+      // taxiway: parallel strip south of the runway, yellow centreline
+      var twTex = taxiwayTexture();
+      var taxi = new THREE.Mesh(new THREE.PlaneGeometry(10, 380),
+        new THREE.MeshStandardMaterial({ map: twTex, roughness: 0.9 }));
+      taxi.rotation.x = -Math.PI / 2;
+      taxi.rotation.z = -hd;
+      taxi.position.set(f.x + 10, f.elev + 0.2, f.z + 55);
+      taxi.receiveShadow = true;
+      group.add(taxi);
+      // connector back to the runway, holding-short bars at the
+      // runway end so the exit reads as a real taxiway
+      var connTex = connectorTexture();
+      var conn = new THREE.Mesh(new THREE.PlaneGeometry(10, 46),
+        new THREE.MeshStandardMaterial({ map: connTex, roughness: 0.9 }));
+      conn.rotation.x = -Math.PI / 2;
+      conn.position.set(f.x + 150, f.elev + 0.2, f.z + 34);
+      conn.receiveShadow = true;
+      group.add(conn);
+      // apron: concrete slab south of the taxiway
+      var apTex = apronTexture();
+      var apron = new THREE.Mesh(new THREE.PlaneGeometry(240, 60),
+        new THREE.MeshStandardMaterial({ map: apTex, roughness: 0.95 }));
+      apron.rotation.x = -Math.PI / 2;
+      apron.position.set(f.x - 50, f.elev + 0.15, f.z + 90);
+      apron.receiveShadow = true;
+      group.add(apron);
+      // terminal: pale block with a warm glass front, teal fascia
+      // and a side annex, at the west end of the apron so it reads
+      // from the approach and from the rollout
+      var termMat = new THREE.MeshStandardMaterial({ color: 0xdfe5e8, roughness: 0.7 });
+      var termBody = new THREE.Mesh(new THREE.BoxGeometry(60, 11, 16), termMat);
+      termBody.position.set(f.x - 70, f.elev + 5.5, f.z + 138);
+      termBody.castShadow = true;
+      group.add(termBody);
+      var termGlass = new THREE.Mesh(new THREE.BoxGeometry(58, 3, 0.5),
+        new THREE.MeshStandardMaterial({ color: 0xffd9a3, emissive: 0xffb84d, emissiveIntensity: 0.7, roughness: 0.2 }));
+      termGlass.position.set(f.x - 70, f.elev + 4.5, f.z + 129.8);
+      group.add(termGlass);
+      var termFascia = new THREE.Mesh(new THREE.BoxGeometry(60, 1.2, 16.4),
+        new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.5 }));
+      termFascia.position.set(f.x - 70, f.elev + 10.2, f.z + 138);
+      group.add(termFascia);
+      var annex = new THREE.Mesh(new THREE.BoxGeometry(18, 7, 12), termMat);
+      annex.position.set(f.x - 32, f.elev + 3.5, f.z + 140);
+      annex.castShadow = true;
+      group.add(annex);
+      // jet bridge: terminal front to the parked plane's door
+      var bridge = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3, 22),
+        new THREE.MeshStandardMaterial({ color: 0xcfd8de, roughness: 0.6, metalness: 0.2 }));
+      bridge.position.set(f.x - 70, f.elev + 4.2, f.z + 119);
+      bridge.castShadow = true;
+      group.add(bridge);
+      var bridgeLeg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 3, 1.2),
+        new THREE.MeshStandardMaterial({ color: 0x8a9298, roughness: 0.7 }));
+      bridgeLeg.position.set(f.x - 70, f.elev + 1.5, f.z + 109);
+      group.add(bridgeLeg);
+      // parked aircraft on the apron (two, different liveries)
+      var parkedA = buildParkedPlane(0xf3ead6, 0x0f6f6a);
+      parkedA.position.set(f.x - 70, f.elev, f.z + 102);
+      parkedA.rotation.y = Math.PI; // nose toward the terminal
+      group.add(parkedA);
+      var parkedB = buildParkedPlane(0xf2ede2, 0xc23a2e);
+      parkedB.position.set(f.x - 15, f.elev, f.z + 95);
+      parkedB.rotation.y = -Math.PI / 2; // nose east
+      group.add(parkedB);
+      // ground equipment: fuel truck by plane A, baggage cart by
+      // plane B, and cones marking the parking spots
+      var truck = new THREE.Group();
+      var truckTank = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.2, 12),
+        new THREE.MeshStandardMaterial({ color: 0xc8ccd0, roughness: 0.35, metalness: 0.5 }));
+      truckTank.rotation.z = Math.PI / 2;
+      truckTank.position.y = 1.1;
+      truck.add(truckTank);
+      var truckCab = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.5, 1.7),
+        new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.6 }));
+      truckCab.position.set(2.3, 0.95, 0);
+      truck.add(truckCab);
+      var wheelMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.9 });
+      [[-1.2, 0.85], [1.2, 0.85], [-1.2, -0.85], [2.3, -0.85]].forEach(function (w) {
+        var wh = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 10), wheelMat);
+        wh.rotation.x = Math.PI / 2;
+        wh.position.set(w[0], 0.34, w[1]);
+        truck.add(wh);
+      });
+      truck.position.set(f.x - 55, f.elev, f.z + 110);
+      truck.rotation.y = 0.4;
+      truck.castShadow = true;
+      group.add(truck);
+      var cart = new THREE.Group();
+      var cartBed = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 1.3),
+        new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.7 }));
+      cartBed.position.y = 0.55;
+      cart.add(cartBed);
+      var bag1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.9),
+        new THREE.MeshStandardMaterial({ color: 0xb98a4a, roughness: 0.9 }));
+      bag1.position.set(-0.5, 1.05, 0);
+      cart.add(bag1);
+      var bag2 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.45, 0.8),
+        new THREE.MeshStandardMaterial({ color: 0x2e6f8e, roughness: 0.9 }));
+      bag2.position.set(0.45, 1.0, 0.1);
+      cart.add(bag2);
+      [[-0.8, 0.55], [0.8, 0.55], [-0.8, -0.55], [0.8, -0.55]].forEach(function (w) {
+        var wh = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.16, 8), wheelMat);
+        wh.rotation.x = Math.PI / 2;
+        wh.position.set(w[0], 0.22, w[1]);
+        cart.add(wh);
+      });
+      cart.position.set(f.x - 8, f.elev, f.z + 102);
+      cart.rotation.y = -0.5;
+      group.add(cart);
+      var coneMat = new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.8 });
+      [[-78, 94], [-62, 94], [-78, 110], [-62, 110]].forEach(function (cp) {
+        var cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.7, 8), coneMat);
+        cone.position.set(f.x + cp[0], f.elev + 0.35, f.z + cp[1]);
+        group.add(cone);
+      });
+    }
+    // windsock: striped orange/white, streams downwind — its
+    // direction is computed from C.WIND, the same wind the HUD
+    // shows, so the sock and the readout can never disagree
+    var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 8, 6),
       new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.6 }));
-    pole.position.set(f.x + lz * (f.width / 2 + 12), f.elev + 3.5, f.z - lx * (f.width / 2 + 12));
+    pole.position.set(f.x + lz * (f.width / 2 + 12), f.elev + 4, f.z - lx * (f.width / 2 + 12));
     pole.castShadow = true;
     group.add(pole);
-    var sock = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.4, 10, 1, true),
-      new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.8, side: THREE.DoubleSide }));
-    sock.rotation.z = Math.PI / 2 - 0.25;
-    sock.position.set(pole.position.x + 1.8, f.elev + 6.4, pole.position.z);
-    group.add(sock);
+    var windTo = ((C.WIND.fromDeg + 180) % 360) * Math.PI / 180;
+    var wdx = Math.sin(windTo), wdz = -Math.cos(windTo);
+    var sock = new THREE.Mesh(new THREE.ConeGeometry(1.1, 4.6, 10, 1, true),
+      new THREE.MeshStandardMaterial({ map: windsockTexture(), roughness: 0.8, side: THREE.DoubleSide }));
+    sock.rotation.z = -Math.PI / 2 - 0.22; // apex downwind, slight droop
+    var sockGroup = new THREE.Group();
+    sockGroup.position.set(pole.position.x + wdx * 2.3, f.elev + 7.4, pole.position.z + wdz * 2.3);
+    sockGroup.rotation.y = Math.atan2(-wdz, wdx);
+    sockGroup.add(sock);
+    group.add(sockGroup);
     // hangar + tower for Halcyon only
     if (f.code === "HAL") {
+      // hangar fronts onto the apron, west end, with a dark door
+      // panel on its north face so it reads as a hangar, not a box
       var hangar = new THREE.Mesh(new THREE.BoxGeometry(22, 9, 16),
         new THREE.MeshStandardMaterial({ color: 0xcfd8de, roughness: 0.7, metalness: 0.25 }));
-      hangar.position.set(f.x - lz * 34, f.elev + 4.5, f.z + lx * 34);
+      hangar.position.set(f.x - 140, f.elev + 4.5, f.z + 92);
       hangar.rotation.y = hd;
       hangar.castShadow = true;
       group.add(hangar);
+      var hangarDoor = new THREE.Mesh(new THREE.BoxGeometry(14, 7, 0.4),
+        new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.6, metalness: 0.3 }));
+      hangarDoor.position.set(f.x - 140, f.elev + 3.5, f.z + 80.8);
+      group.add(hangarDoor);
       var tower = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 14, 8),
         new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.8 }));
       tower.position.set(f.x + lz * 40, f.elev + 7, f.z - lx * 40);
@@ -384,6 +664,17 @@
         new THREE.MeshStandardMaterial({ color: 0xc23a2e, roughness: 0.8 }));
       band.position.set(tower.position.x, f.elev + 12.6, tower.position.z);
       group.add(band);
+      // white band under the red one + a base building, so the tower
+      // reads as a tower from the ground as well as from the air
+      var bandW = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.65, 1.6, 8),
+        new THREE.MeshStandardMaterial({ color: 0xf2ede2, roughness: 0.8 }));
+      bandW.position.set(tower.position.x, f.elev + 10.8, tower.position.z);
+      group.add(bandW);
+      var towerBase = new THREE.Mesh(new THREE.BoxGeometry(9, 3, 7),
+        new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.8 }));
+      towerBase.position.set(tower.position.x, f.elev + 1.5, tower.position.z);
+      towerBase.castShadow = true;
+      group.add(towerBase);
       var cabGlass = new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.4, 7.2),
         new THREE.MeshStandardMaterial({ color: 0xffd9a3, emissive: 0xffb84d, emissiveIntensity: 0.9, roughness: 0.2 }));
       cabGlass.position.set(tower.position.x, f.elev + 15.8, tower.position.z);
@@ -646,8 +937,8 @@
     var ocean = buildOcean(scene, C, quality);
     buildTerrain(scene, C, phys, quality);
     var treeCount = buildTrees(scene, C, phys);
-    var hal = buildAirfield(scene, C, C.AIRFIELDS.halcyon, "27", "09");
-    var ncy = buildAirfield(scene, C, C.AIRFIELDS.northCay, "36", "18");
+    var hal = buildAirfield(scene, C, C.AIRFIELDS.halcyon, "27", "09", phys);
+    var ncy = buildAirfield(scene, C, C.AIRFIELDS.northCay, "36", "18", phys);
     var harbor = buildHarbor(scene, C);
     var rings = buildRings(scene, C);
     var clouds = buildClouds(scene);

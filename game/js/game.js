@@ -148,9 +148,17 @@
 
     function endMissionComplete() {
       var m = game.mission;
+      // the second line only names the goals this mission actually
+      // has: a ring rally never dropped a crate, so "Crates on
+      // target 0/3" must not appear there
+      var goalLine;
+      if (m.id === "drop") goalLine = "Crates on target " + m.cratesHit + " / 3";
+      else if (m.id === "hop") goalLine = "Landings " + m.landings.length + " / 2";
+      else if (m.id === "free") goalLine = "Landings " + m.landings.length;
+      else goalLine = "Rings " + m.ringsHit + " / 8";
       var lines = [
         "Mission time " + SkylaneHud.fmtTime(m.time),
-        "Rings " + m.ringsHit + " / 8 &nbsp;·&nbsp; Crates on target " + m.cratesHit + " / 3",
+        goalLine,
         "Landings " + m.landings.length + " (best quality " +
           (m.landings.length ? Math.max.apply(null, m.landings.map(function (l) { return l.quality; })) : 0) + ")",
       ];

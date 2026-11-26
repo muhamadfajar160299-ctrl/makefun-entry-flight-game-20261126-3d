@@ -73,6 +73,19 @@
       var flat = lerp(h, f.elev, tL * tW);
       h = Math.min(h, flat);
     }
+    // Graded apron pad south of Halcyon Field: the taxiway, apron,
+    // terminal and hangar sit on ground flattened to field
+    // elevation, with a 25 m fade back to natural terrain so no
+    // cliff edge appears at the pad boundary.
+    var ap = C.APRON;
+    if (ap) {
+      var adx = Math.abs(x - ap.x), adz = Math.abs(z - ap.z);
+      var fade = 25;
+      var tx = 1 - smooth(clamp((adx - ap.hw) / fade, 0, 1));
+      var tz = 1 - smooth(clamp((adz - ap.hl) / fade, 0, 1));
+      var at = tx * tz;
+      if (at > 0) h = lerp(h, ap.elev, at);
+    }
     return h;
   }
 
