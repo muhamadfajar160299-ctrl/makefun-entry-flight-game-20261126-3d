@@ -203,6 +203,151 @@ check("airborne after takeoff", tk.s.airborne === true);
   check("preset 8 rings banks 800 pts", m2.ringsHit === 8 && m2.score === 800 && m2.nextRing === 8, "score=" + m2.score);
 })();
 
+// ---- v4: wind model ------------------------------------------------------------
+(function () {
+  const w0 = Phys.windAt(C, 0);
+  const w0b = Phys.windAt(C, 0);
+  check("windAt deterministic", w0.kt === w0b.kt && w0.x === w0b.x, "kt=" + w0.kt.toFixed(2));
+  check("wind speed inside steady +/- gust band", w0.kt >= 2 && w0.kt <= 14, "kt=" + w0.kt.toFixed(2));
+  check("westerly blows east (+x)", w0.x > 0, "wx=" + w0.x.toFixed(2));
+  const w30 = Phys.windAt(C, 30);
+  check("gust swell changes wind over time", Math.abs(w30.kt - w0.kt) > 0.5, "kt 0s=" + w0.kt.toFixed(1) + " 30s=" + w30.kt.toFixed(1));
+  function driftKt(speedKt) {
+    const C2 = Object.assign({}, C, { WIND: { fromDeg: 270, speedKt: speedKt, gustKt: speedKt > 0 ? 6 : 0 } });
+    const s = Phys.makeState(C2, { x: 0, y: 300, z: 0, heading: 0 });
+    s.onGround = false; s.airborne = true;
+    s.vx = 0; s.vy = 0; s.vz = -50;
+    for (let i = 0; i < 600; i++) {
+      Phys.update(C2, s, 1 / 60, { throttleSet: 0, pitch: 0, roll: 0, yaw: 0 }, 0);
+      if (s.y < 200) { s.y = 300; s.vy = 0; }
+    }
+    return s.x;
+  }
+  const windy = driftKt(8), calm = driftKt(0);
+  check("wind drifts an airborne plane east", windy - calm > 8, "windy x=" + windy.toFixed(1) + " calm x=" + calm.toFixed(1));
+})();
+
+// ---- v4: damage hurts handling ----------------------------------------------------
+(function () {
+  function rollAfter(damage, secs) {
+    const s = Phys.makeState(C, { x: 0, y: 300, z: 0, heading: 0 });
+    s.onGround = false; s.airborne = true; s.damage = damage;
+    s.vx = 0; s.vy = 0; s.vz = -50;
+    for (let i = 0; i < 60 * secs; i++) {
+      Phys.update(C, s, 1 / 60, { throttleSet: 0.5, pitch: 0, roll: 1, yaw: 0 }, 0);
+      if (s.y < 200) { s.y = 300; s.vy = 0; }
+    }
+    return s.roll;
+  }
+  const clean = rollAfter(0, 0.5), bent = rollAfter(90, 0.5);
+  check("damage 90 rolls slower than damage 0", bent < clean - 0.1, "clean=" + clean.toFixed(2) + " bent=" + bent.toFixed(2));
+  const s = Phys.makeState(C, { x: 0, y: 300, z: 0, heading: 0 });
+  s.onGround = false; s.airborne = true; s.damage = 90;
+  s.vx = 0; s.vy = 0; s.vz = -50;
+  for (let i = 0; i < 60 * 5; i++) {
+    Phys.update(C, s, 1 / 60, { throttleSet: 0.5, pitch: 0, roll: 0, yaw: 0 }, 0);
+    if (s.y < 200) { s.y = 300; s.vy = 0; }
+  }
+  check("bent airframe pulls right hands-off", s.roll > 0.05, "roll=" + s.roll.toFixed(3));
+})();
+
+// ---- v4: fuel leak + fuel-low / fuel-empty ------------------------------------------
+(function () {
+  function burnFor(leak, secs) {
+    const s = Phys.makeState(C, { x: 0, y: 300, z: 0, heading: 0 });
+    s.onGround = false; s.airborne = true; s.fuelLeak = leak;
+    s.vx = 0; s.vy = 0; s.vz = -50;
+    for (let i = 0; i < secs * 2; i++) {
+      Phys.update(C, s, 0.5, { throttleSet: 0, pitch: 0, roll: 0, yaw: 0 }, 0);
+      if (s.y < 200) { s.y = 300; s.vy = 0; }
+      if (s.crashed) break;
+    }
+    return s.fuel;
+  }
+  const leakFuel = burnFor(1 / 360, 60), okFuel = burnFor(0, 60);
+  check("fuel leak drains faster than normal burn", leakFuel < 0.8 && okFuel > 0.9, "leak=" + leakFuel.toFixed(2) + " ok=" + okFuel.toFixed(2));
+  // fuel-low fires exactly once crossing 15%
+  const s = Phys.makeState(C, { x: 0, y: 300, z: 0, heading: 0 });
+  s.onGround = false; s.airborne = true; s.fuel = 0.16;
+  s.vx = 0; s.vy = 0; s.vz = -50;
+  let lowCount = 0, emptySeen = false;
+  for (let i = 0; i < 120; i++) {
+    const evts = Phys.update(C, s, 0.5, { throttleSet: 0, pitch: 0, roll: 0, yaw: 0 }, 0);
+    if (evts.some((e) => e.type === "fuel-low")) lowCount++;
+    if (evts.some((e) => e.type === "fuel-empty")) emptySeen = true;
+    if (s.y < 200) { s.y = 300; s.vy = 0; }
+  }
+  check("fuel-low fires exactly once", lowCount === 1, "count=" + lowCount);
+  // fuel-empty kills the throttle
+  const s2 = Phys.makeState(C, { x: 0, y: 300, z: 0, heading: 0 });
+  s2.onGround = false; s2.airborne = true; s2.fuel = 0.005;
+  s2.vx = 0; s2.vy = 0; s2.vz = -50;
+  let sawEmpty = false;
+  const input = { throttleSet: 1, pitch: 0, roll: 0, yaw: 0 };
+  for (let i = 0; i < 120; i++) {
+    const evts = Phys.update(C, s2, 1 / 60, input, 0);
+    input.throttleSet = null;
+    if (evts.some((e) => e.type === "fuel-empty")) sawEmpty = true;
+    if (s2.y < 200) { s2.y = 300; s2.vy = 0; }
+    if (sawEmpty) break;
+  }
+  check("fuel-empty event fires and throttle cuts to 0", sawEmpty && s2.throttle === 0, "throttle=" + s2.throttle);
+})();
+
+// ---- v4: ground traffic stepper ------------------------------------------------------
+(function () {
+  const tr = Phys.makeTraffic(C, "taxi", -40 + 40, -1);
+  check("taxi lane bounds from config", tr.min === -190 && tr.max === 170, "min=" + tr.min + " max=" + tr.max);
+  check("taxi starts westbound", tr.dir === -1 && Math.abs(tr.heading - Math.PI / 2) < 0.01, "heading=" + tr.heading.toFixed(2));
+  for (let i = 0; i < 120; i++) Phys.trafficStep(tr, 0.5); // 60 s
+  check("taxi turns at the west end and heads back east", tr.dir === 1 && tr.mode === "taxi" && tr.x > -190, "x=" + tr.x.toFixed(0) + " dir=" + tr.dir + " mode=" + tr.mode);
+  check("taxi heading faces east after the turn", Math.abs(tr.heading - (-Math.PI / 2)) < 0.01, "heading=" + tr.heading.toFixed(2));
+  const truck = Phys.makeTraffic(C, "truck", -40 - 155, 1);
+  check("truck nose faces +x eastbound", Math.abs(truck.heading) < 0.01, "heading=" + truck.heading.toFixed(2));
+  for (let i = 0; i < 160; i++) Phys.trafficStep(truck, 0.5); // 80 s: east end at 65 s, turned, heading back west
+  check("truck reaches its east end and turns around", truck.dir === -1 && truck.x < 0, "x=" + truck.x.toFixed(0) + " dir=" + truck.dir);
+})();
+
+// ---- v4: night mission (4 rings, then land HAL) -----------------------------------------
+(function () {
+  const m = Missions.makeMission(C, "night");
+  Missions.start(C, m);
+  const s = Phys.makeState(C, { x: 0, y: 100, z: 0, heading: 0 });
+  s.onGround = false; s.airborne = true;
+  for (let i = 0; i < 4; i++) {
+    const r = C.RINGS[i];
+    s.x = r.x; s.y = r.y; s.z = r.z;
+    Missions.update(C, m, 0.1, s, []);
+  }
+  check("night run banks 4 rings for 400 pts", m.ringsHit === 4 && m.score === 400, "rings=" + m.ringsHit + " score=" + m.score);
+  const tgt = Missions.currentTarget(C, m);
+  check("after ring 4 the night target is Halcyon", tgt && tgt.label === "HALCYON FIELD", tgt && tgt.label);
+  Missions.update(C, m, 0.1, s, [{ type: "touchdown", quality: 170, vspeed: 2, field: "HAL" }]);
+  check("night run completes on the HAL landing", m.done === true, "done=" + m.done);
+  check("night score adds landing quality + time bonus", m.score > 570, "score=" + m.score);
+})();
+
+// ---- v4: emergency mission (any survivable touchdown counts) ------------------------------
+(function () {
+  const m = Missions.makeMission(C, "emergency");
+  Missions.start(C, m);
+  const s = Phys.makeState(C, { x: -40, y: 26, z: -60, heading: Math.PI / 2 });
+  Missions.update(C, m, 0.1, s, [{ type: "touchdown", quality: 150, vspeed: 2, field: "HAL" }]);
+  check("mayday completes on a survivable touchdown", m.done === true, "done=" + m.done);
+  check("mayday score includes landing quality", m.score >= 150, "score=" + m.score);
+  const prog = Missions.progressText(C, m);
+  check("mayday panel shows the fuel state", /Fuel \d+%/.test(prog.b), prog.b);
+})();
+
+// ---- v4: mission roster ----------------------------------------------------------------------
+(function () {
+  check("six missions incl. night + emergency", C.MISSIONS.length === 6, "n=" + C.MISSIONS.length);
+  const night = C.MISSIONS.find((d) => d.id === "night");
+  const em = C.MISSIONS.find((d) => d.id === "emergency");
+  check("night mission is a 4-ring night run", night && night.rings === 4 && night.night === true);
+  check("emergency starts on 35% fuel with a leak", em && em.fuelStart === 0.35 && em.fuelLeak > 0, "fuelStart=" + (em && em.fuelStart));
+})();
+
 // ---- crash on ditching -------------------------------------------------------------------------
 (function () {
   const s = Phys.makeState(C, { x: 1200, y: 3, z: -100, heading: 0 });

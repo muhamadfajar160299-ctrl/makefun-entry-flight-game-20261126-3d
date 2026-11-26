@@ -89,15 +89,80 @@
     return h;
   }
 
+  // Wind at sim-time t: steady sea breeze plus a slow deterministic
+  // gust swell (two sines, so the same flight always meets the same
+  // weather). Returns the wind vector in m/s (x east, z south), the
+  // live speed in knots for the HUD, and the signed gust factor
+  // -1..1 that swings the windsock and hurries the clouds.
+  function windAt(C, t) {
+    var base = C.WIND.speedKt * 0.514444;
+    var gustAmp = (C.WIND.gustKt || 0) * 0.514444;
+    var gust = Math.sin(t * 0.11) * 0.6 + Math.sin(t * 0.043 + 1.7) * 0.4;
+    var speed = Math.max(0.5, base + gust * gustAmp);
+    var from = (C.WIND.fromDeg + Math.sin(t * 0.05) * 4) * Math.PI / 180;
+    var to = from + Math.PI; // wind blows TOWARD from+180
+    return {
+      x: Math.sin(to) * speed, z: -Math.cos(to) * speed,
+      kt: speed / 0.514444, gust: gust,
+    };
+  }
+
+  // Ground-traffic stepper (pure math, no THREE): a vehicle shuttles
+  // along its lane, pauses, turns around and comes back. tr fields:
+  // x, dir (+1/-1), mode ("taxi"|"pause"|"turn"), turnT, pauseT,
+  // speed, min, max, heading, prevHeading, nose ("z-" for aircraft
+  // whose nose is -z, "x+" for trucks whose nose is +x).
+  function trafficStep(tr, dt) {
+    function headingFor(dir, nose) {
+      if (nose === "x+") return dir > 0 ? 0 : Math.PI;
+      return dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+    }
+    function angLerp(a, b, t) {
+      var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      return a + d * t;
+    }
+    if (tr.mode === "pause") {
+      tr.pauseT -= dt;
+      if (tr.pauseT <= 0) { tr.mode = "turn"; tr.turnT = 0; tr.prevHeading = tr.heading; tr.dir *= -1; }
+    } else if (tr.mode === "turn") {
+      tr.turnT += dt;
+      var k = Math.min(1, tr.turnT / 1.2);
+      tr.heading = angLerp(tr.prevHeading, headingFor(tr.dir, tr.nose), k);
+      if (k >= 1) tr.mode = "taxi";
+    } else {
+      tr.x += tr.dir * tr.speed * dt;
+      tr.heading = headingFor(tr.dir, tr.nose);
+      if (tr.dir > 0 && tr.x >= tr.max) { tr.x = tr.max; tr.mode = "pause"; tr.pauseT = 2.5; }
+      if (tr.dir < 0 && tr.x <= tr.min) { tr.x = tr.min; tr.mode = "pause"; tr.pauseT = 2.5; }
+    }
+    return tr;
+  }
+
+  function makeTraffic(C, key, startX, startDir) {
+    var p = C.TRAFFIC[key];
+    var f = C.AIRFIELDS.halcyon;
+    var tr = {
+      x: startX !== undefined ? startX : f.x + p.dxMin,
+      dir: startDir || 1, mode: "taxi", turnT: 0, pauseT: 0,
+      speed: p.speed, min: f.x + p.dxMin, max: f.x + p.dxMax,
+      z: f.z + p.dz, nose: p.nose, heading: 0, prevHeading: 0,
+    };
+    tr.heading = tr.dir > 0
+      ? (p.nose === "x+" ? 0 : -Math.PI / 2)
+      : (p.nose === "x+" ? Math.PI : Math.PI / 2);
+    tr.prevHeading = tr.heading;
+    return tr;
+  }
+
   function makeState(C, start) {
     return {
       x: start.x, y: start.y, z: start.z,
       vx: 0, vy: 0, vz: 0,
       heading: start.heading, pitch: 0, roll: 0,
       speed: 0, throttle: 0, gearDown: true, flaps: 0,
-      fuel: 1, damage: 0, onGround: true, airborne: false,
+      fuel: 1, fuelLeak: 0, damage: 0, onGround: true, airborne: false,
       stallWarn: false, crashed: false, crashReason: "",
-      verticalSpeed: 0, agl: 0,
+      verticalSpeed: 0, agl: 0, time: 0, windKt: C.WIND.speedKt,
     };
   }
 
@@ -106,6 +171,9 @@
     var events = [];
     var P = C.PLANE;
     if (s.crashed) return events;
+    s.time += dt;
+    var wind = windAt(C, s.time);
+    s.windKt = wind.kt;
 
     // --- controls ---------------------------------------------------------
     if (input.throttleDelta) s.throttle = clamp(s.throttle + input.throttleDelta * dt, 0, 1);
@@ -118,9 +186,19 @@
     s.speed = speed;
 
     // --- fuel ---------------------------------------------------------------
+    // A leak (Mayday mission) drains on top of the normal burn, so the
+    // gauge falls visibly faster than the throttle alone would explain.
     var burn = (P.fuelBurnIdle + (1 - P.fuelBurnIdle) * s.throttle) / P.fuelSeconds;
-    s.fuel = Math.max(0, s.fuel - burn * dt);
+    s.fuel = Math.max(0, s.fuel - (burn + (s.fuelLeak || 0)) * dt);
+    if (s.fuel < 0.15 && !s._fuelLowNoted) { s._fuelLowNoted = true; events.push({ type: "fuel-low" }); }
     if (s.fuel <= 0 && s.throttle > 0) { s.throttle = 0; events.push({ type: "fuel-empty" }); }
+
+    // --- damage handling ------------------------------------------------------
+    // A bent airframe flies worse: control authority fades as damage
+    // climbs, and past 50% the plane pulls gently to the right, so a
+    // hard landing is felt for the rest of the sortie, not just read.
+    var dmgFactor = 1 - s.damage / 250;
+    var dmgPull = s.damage >= 50 ? 0.04 * (s.damage / 100) : 0;
 
     var speedFactor = clamp(speed / 40, 0.25, 1); // control authority
     var flying = !s.onGround && speed > stallSpeed * 0.55;
@@ -150,7 +228,9 @@
     } else {
       // --- flight -----------------------------------------------------------
       var authority = flying ? speedFactor : speedFactor * 0.45;
+      authority *= dmgFactor;
       s.roll += (input.roll || 0) * P.rollRate * authority * dt;
+      s.roll += dmgPull * dt; // bent airframe pulls right
       s.roll = clamp(s.roll, -1.35, 1.35);
       // roll stability: wings level themselves slowly without input
       if (!(input.roll)) s.roll *= Math.max(0, 1 - 0.25 * dt);
@@ -194,6 +274,11 @@
       } else s._stallNoted = false;
 
       s.x += s.vx * dt; s.y += s.vy * dt; s.z += s.vz * dt;
+      // wind: the air mass itself moves, so the plane drifts with it
+      // (a headwind on final slows the groundspeed; a gust shoves the
+      // wing). Position-only: the airspeed the wing feels is unchanged.
+      s.x += wind.x * dt * 0.35; s.z += wind.z * dt * 0.35;
+      s.roll += (Math.sin(s.time * 1.7) + Math.sin(s.time * 0.83 + 1.3)) * 0.012 * (0.5 + Math.abs(wind.gust)) * dt;
       s.verticalSpeed = s.vy;
     }
 
@@ -275,7 +360,8 @@
 
   var api = {
     clamp: clamp, lerp: lerp, terrainHeight: terrainHeight, vnoise: vnoise,
-    makeState: makeState, update: update,
+    makeState: makeState, update: update, windAt: windAt,
+    trafficStep: trafficStep, makeTraffic: makeTraffic,
     landingQuality: landingQuality, nearestField: nearestField,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

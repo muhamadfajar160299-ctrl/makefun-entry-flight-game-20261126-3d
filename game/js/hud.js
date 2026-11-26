@@ -28,6 +28,14 @@
         return "THREAD THE RINGS — " + (C.RINGS.length - m.ringsHit) + " TO GO";
       return "LAND AT HALCYON FIELD — " + fmtDist(dist);
     }
+    if (m.id === "night") {
+      if (m.nextRing < (m.def.rings || 4))
+        return "NIGHT RINGS — " + ((m.def.rings || 4) - m.ringsHit) + " TO GO · FOLLOW THE LIGHTS";
+      return "LAND AT HALCYON FIELD — " + fmtDist(dist);
+    }
+    if (m.id === "emergency") {
+      return "MAYDAY — LAND NOW · FUEL " + Math.round(s.fuel * 100) + "%";
+    }
     if (m.id === "hop") {
       var where = m.hopsDone === 0 ? "NORTH CAY STRIP" : "HALCYON FIELD";
       return "LAND AT " + where + " — " + fmtDist(dist);
@@ -128,6 +136,13 @@
       // objective headline under the compass
       var objEl = $("hud-objective");
       if (objEl && mission) objEl.textContent = objectiveLine(C2, mission, target, s);
+      // wind readout: live speed (steady + gust swell) from the same
+      // wind model the windsock, the clouds and the drift use
+      var windLive = $("hud-wind");
+      if (windLive && s.windKt !== undefined) {
+        var gusting = s.windKt > C2.WIND.speedKt + 2 ? " · GUSTING" : "";
+        windLive.textContent = "WIND " + C2.WIND.fromDeg + "° · " + Math.round(s.windKt) + " KT" + gusting;
+      }
       // mission panel
       if (mission) {
         $("hud-mission-name").textContent = mission.def.num + ". " + mission.def.name;
@@ -158,6 +173,10 @@
       } else msgEl.style.display = "none";
       // stall warning
       $("hud-stall").classList.toggle("hidden", !s.stallWarn);
+      // low-fuel warning: on whenever the gauge is under 15% and the
+      // sortie is still live — the Mayday lives here
+      var fw = $("hud-fuelwarn");
+      if (fw) fw.classList.toggle("hidden", !(s.fuel < 0.15 && mission && !mission.done));
       // attitude
       drawAttitude(s.roll, s.pitch);
       // cockpit gauges

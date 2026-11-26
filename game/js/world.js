@@ -80,10 +80,10 @@
     var geo = new THREE.SphereGeometry(3600, 28, 18);
     var mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { sunDir: { value: sunDir } },
+      uniforms: { sunDir: { value: sunDir }, uNight: { value: 0 } },
       vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); " +
         "gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
-      fragmentShader: "varying vec3 vDir; uniform vec3 sunDir;" +
+      fragmentShader: "varying vec3 vDir; uniform vec3 sunDir; uniform float uNight;" +
         "void main(){ float h = clamp(vDir.y, -0.08, 1.0);" +
         " vec3 zen = vec3(0.22, 0.42, 0.68);" +
         " vec3 mid = vec3(0.55, 0.68, 0.84);" +
@@ -95,6 +95,12 @@
         " col += vec3(1.0, 0.58, 0.22) * pow(s, 60.0) * 0.18;" +
         " col += vec3(1.0, 0.55, 0.20) * pow(s, 10.0) * 0.15;" +
         " col = mix(col, vec3(0.36, 0.32, 0.30), smoothstep(-0.02, -0.08, vDir.y));" +
+        // night: the golden hour drains out of the sky and a deep blue
+        // takes over; the sun disc fades to a faint moon-glow so the
+        // runway lights — not the sky — become the picture
+        " vec3 nightCol = mix(vec3(0.015, 0.025, 0.07), vec3(0.10, 0.15, 0.26), smoothstep(0.0, 0.55, h));" +
+        " col = mix(col, nightCol, uNight);" +
+        " col *= (1.0 - uNight * 0.85 * smoothstep(0.02, 0.4, s));" +
         " gl_FragColor = vec4(col, 1.0); }",
     });
     var sky = new THREE.Mesh(geo, mat);
@@ -109,9 +115,10 @@
     sc.near = 200; sc.far = 4200;
     sun.shadow.bias = -0.0006;
     scene.add(sun); scene.add(sun.target);
-    scene.add(new THREE.HemisphereLight(C.HEMI_SKY, C.HEMI_GROUND, C.HEMI_INTENSITY));
+    var hemi = new THREE.HemisphereLight(C.HEMI_SKY, C.HEMI_GROUND, C.HEMI_INTENSITY);
+    scene.add(hemi);
     scene.fog = new THREE.Fog(C.FOG_COLOR, C.FOG_NEAR, C.FOG_FAR);
-    return { sunDir: sunDir };
+    return { sunDir: sunDir, sun: sun, hemi: hemi, skyMat: mat };
   }
 
   // ---- ocean ------------------------------------------------------------------
@@ -131,7 +138,7 @@
     mesh.receiveShadow = true;
     scene.add(mesh);
     var base = geo.attributes.position.array.slice();
-    return { mesh: mesh, geo: geo, base: base, bump: bump };
+    return { mesh: mesh, geo: geo, base: base, bump: bump, mat: mat };
   }
 
   function updateOcean(o, t, quality) {
@@ -334,6 +341,16 @@
       for (var b = 0; b < 4; b++) {
         g.fillRect(24 + b * 56, 26, 34, 12);
         g.fillRect(24 + b * 56, h - 38, 34, 12);
+      }
+      // rubber tire marks: dark streaks where wheels actually touch
+      // down, on both aiming points — the strip has been landed on
+      g.fillStyle = "rgba(18,18,20,0.30)";
+      for (var s2 = 0; s2 < 2; s2++) {
+        var sy = s2 === 0 ? h * 0.30 : h * 0.70 - 60;
+        for (var k = 0; k < 5; k++) {
+          g.fillRect(w / 2 - 46 + k * 3, sy - 30 + k * 14, 7, 90);
+          g.fillRect(w / 2 + 22 + k * 3, sy - 24 + k * 12, 7, 84);
+        }
       }
       g.font = "bold 92px Arial"; g.textAlign = "center"; g.fillStyle = "#f2f2ea";
       g.save(); g.translate(w / 2, 190); g.rotate(Math.PI); g.fillText(codeA, 0, 0); g.restore();
@@ -565,6 +582,17 @@
       parkedB.position.set(f.x - 15, f.elev, f.z + 95);
       parkedB.rotation.y = -Math.PI / 2; // nose east
       group.add(parkedB);
+      // two more parked aircraft east of the terminal, different
+      // liveries, so the apron reads busy from the approach — four
+      // parked plus one taxiing, not a deserted field
+      var parkedC = buildParkedPlane(0xe8eef2, 0x2e6f8e);
+      parkedC.position.set(f.x + 42, f.elev, f.z + 100);
+      parkedC.rotation.y = Math.PI * 0.75;
+      group.add(parkedC);
+      var parkedD = buildParkedPlane(0xf6e3c8, 0x274b63);
+      parkedD.position.set(f.x + 96, f.elev, f.z + 92);
+      parkedD.rotation.y = -Math.PI / 2; // nose east
+      group.add(parkedD);
       // ground equipment: fuel truck by plane A, baggage cart by
       // plane B, and cones marking the parking spots
       var truck = new THREE.Group();
@@ -584,10 +612,20 @@
         wh.position.set(w[0], 0.34, w[1]);
         truck.add(wh);
       });
-      truck.position.set(f.x - 55, f.elev, f.z + 110);
-      truck.rotation.y = 0.4;
       truck.castShadow = true;
       group.add(truck);
+      // the fuel truck and the baggage cart WORK the apron: they
+      // shuttle along their lanes (physics.trafficStep, tested) instead
+      // of sitting frozen, so the apron is alive in every frame
+      var traffic = { truck: null, cart: null, taxi: null };
+      if (phys && phys.makeTraffic) {
+        traffic.truck = { g: truck, tr: phys.makeTraffic(C, "truck", f.x - 155, 1) };
+        truck.position.set(traffic.truck.tr.x, f.elev, traffic.truck.tr.z);
+        truck.rotation.y = traffic.truck.tr.heading;
+      } else {
+        truck.position.set(f.x - 55, f.elev, f.z + 110);
+        truck.rotation.y = 0.4;
+      }
       var cart = new THREE.Group();
       var cartBed = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 1.3),
         new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.7 }));
@@ -610,6 +648,67 @@
       cart.position.set(f.x - 8, f.elev, f.z + 102);
       cart.rotation.y = -0.5;
       group.add(cart);
+      if (traffic && phys && phys.makeTraffic) {
+        traffic.cart = { g: cart, tr: phys.makeTraffic(C, "cart", f.x - 68, 1) };
+        cart.position.set(traffic.cart.tr.x, f.elev, traffic.cart.tr.z);
+        cart.rotation.y = traffic.cart.tr.heading;
+      }
+      // taxiing aircraft: a fifth Kestrel that actually taxis the
+      // parallel taxiway — east to west, pause, turn, back again — so
+      // there is moving traffic in the landing and complete frames
+      if (phys && phys.makeTraffic) {
+        var taxiPlane = buildParkedPlane(0xf2ede2, 0x2e6f8e);
+        traffic.taxi = { g: taxiPlane, tr: phys.makeTraffic(C, "taxi", f.x + 40, -1) };
+        taxiPlane.position.set(traffic.taxi.tr.x, f.elev, traffic.taxi.tr.z);
+        taxiPlane.rotation.y = traffic.taxi.tr.heading;
+        group.add(taxiPlane);
+      }
+      // taxiway edge lights: blue, both edges, every ~38 m, with a
+      // glow sprite on every fourth one so the taxiway reads at dusk
+      var twLightGeo = new THREE.SphereGeometry(0.4, 8, 6);
+      var twLightMat = new THREE.MeshStandardMaterial({ color: 0x2a6aff, emissive: 0x2a6aff, emissiveIntensity: 1.8 });
+      var twCount = 0;
+      for (var tx = -170; tx <= 190; tx += 38) {
+        for (var tside = -1; tside <= 1; tside += 2) {
+          var twDot = new THREE.Mesh(twLightGeo, twLightMat);
+          twDot.position.set(f.x + tx, f.elev + 0.6, f.z + 55 + tside * 6);
+          group.add(twDot);
+          twCount++;
+          if (twCount % 8 === 0) {
+            var twGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: blobTex, color: 0x2a6aff, transparent: true, opacity: 0.4,
+              blending: THREE.AdditiveBlending, depthWrite: false }));
+            twGlow.scale.set(4, 4, 1);
+            twGlow.position.set(f.x + tx, f.elev + 0.7, f.z + 55 + tside * 6);
+            group.add(twGlow);
+          }
+        }
+      }
+      // apron floodlights: two tall poles with warm lamps and a soft
+      // glow, so the apron and the parked aircraft read after sunset
+      var floodLights = [];
+      [[-160, 58], [55, 58]].forEach(function (fp) {
+        var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 9, 6),
+          new THREE.MeshStandardMaterial({ color: 0x5a6068, roughness: 0.6, metalness: 0.5 }));
+        pole.position.set(f.x + fp[0], f.elev + 4.5, f.z + fp[1]);
+        pole.castShadow = true;
+        group.add(pole);
+        var lampHead = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.8),
+          new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.6 }));
+        lampHead.position.set(f.x + fp[0], f.elev + 9.1, f.z + fp[1]);
+        group.add(lampHead);
+        var lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 6),
+          new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc23d, emissiveIntensity: 2.2 }));
+        lamp.position.set(f.x + fp[0], f.elev + 8.8, f.z + fp[1]);
+        group.add(lamp);
+        var floodGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: blobTex, color: 0xffd98a, transparent: true, opacity: 0.5,
+          blending: THREE.AdditiveBlending, depthWrite: false }));
+        floodGlow.scale.set(16, 16, 1);
+        floodGlow.position.set(f.x + fp[0], f.elev + 8.8, f.z + fp[1]);
+        group.add(floodGlow);
+        floodLights.push(floodGlow);
+      });
       var coneMat = new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.8 });
       [[-78, 94], [-62, 94], [-78, 110], [-62, 110]].forEach(function (cp) {
         var cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.7, 8), coneMat);
@@ -630,6 +729,7 @@
     var sock = new THREE.Mesh(new THREE.ConeGeometry(1.1, 4.6, 10, 1, true),
       new THREE.MeshStandardMaterial({ map: windsockTexture(), roughness: 0.8, side: THREE.DoubleSide }));
     sock.rotation.z = -Math.PI / 2 - 0.22; // apex downwind, slight droop
+    sock.userData.baseZ = sock.rotation.z; // update() sways it with the gusts
     var sockGroup = new THREE.Group();
     sockGroup.position.set(pole.position.x + wdx * 2.3, f.elev + 7.4, pole.position.z + wdz * 2.3);
     sockGroup.rotation.y = Math.atan2(-wdz, wdx);
@@ -689,7 +789,7 @@
       group.add(beacon);
     }
     scene.add(group);
-    return { group: group, sock: sock };
+    return { group: group, sock: sock, traffic: (typeof traffic !== "undefined" && traffic) || null, floodLights: (typeof floodLights !== "undefined" && floodLights) || null };
   }
 
   // ---- harbor ------------------------------------------------------------------
@@ -801,13 +901,16 @@
     var tex = cloudTexture();
     var clouds = [];
     var rnd = mulberry32(31337);
-    for (var i = 0; i < 36; i++) {
+    // two layers: a high thin deck and a lower puffy band, so the sky
+    // has depth instead of one flat shelf of sprites
+    for (var i = 0; i < 46; i++) {
       var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: 0xfff0dd, transparent: true, opacity: 0.2 + rnd() * 0.2, depthWrite: false }));
       var s = 100 + rnd() * 160;
       sp.scale.set(s, s * 0.5, 1);
-      sp.position.set((rnd() - 0.5) * 3800, 280 + rnd() * 160, (rnd() - 0.5) * 3800);
+      var high = i % 3 === 0;
+      sp.position.set((rnd() - 0.5) * 3800, high ? 380 + rnd() * 140 : 250 + rnd() * 110, (rnd() - 0.5) * 3800);
       scene.add(sp);
-      clouds.push({ sp: sp, v: 1.2 + rnd() * 2.2 });
+      clouds.push({ sp: sp, v: 1.2 + rnd() * 2.2, high: high });
     }
     return clouds;
   }
@@ -949,15 +1052,73 @@
       sky: sky, ocean: ocean, rings: rings, clouds: clouds,
       harbor: harbor, lamp: lamp, particles: particles, labels: labels,
       windsocks: [hal.sock, ncy.sock], treeCount: treeCount,
+      traffic: hal.traffic, floodLights: hal.floodLights,
+      scene: scene, phys: phys, C: C,
     };
+  }
+
+  // Night mode for the Night Run: the sun drops to a moon-glow, the
+  // sky shader drains to deep blue, the sea goes dark and the fog
+  // turns cold — the emissive runway / PAPI / taxiway lights then
+  // carry the whole picture, which is the point of the mission.
+  function setNight(w, on) {
+    if (!w || !w.sky) return;
+    w.sky.sun.intensity = on ? 0.28 : w.C.SUN_INTENSITY;
+    w.sky.sun.color.setHex(on ? 0x8fb4ff : w.C.SUN_COLOR);
+    w.sky.hemi.intensity = on ? 0.22 : w.C.HEMI_INTENSITY;
+    w.sky.skyMat.uniforms.uNight.value = on ? 1 : 0;
+    w.scene.fog.color.setHex(on ? 0x0d1b2e : w.C.FOG_COLOR);
+    w.ocean.mat.color.setHex(on ? 0x06121f : 0x0d4258);
+    if (w.floodLights) {
+      for (var i = 0; i < w.floodLights.length; i++) {
+        w.floodLights[i].material.opacity = on ? 0.75 : 0.5;
+        var s = on ? 22 : 16;
+        w.floodLights[i].scale.set(s, s, 1);
+      }
+    }
+  }
+
+  // Snap every ground vehicle back to its staging start pose, so a
+  // screenshot staging always meets the same traffic picture.
+  function resetTraffic(w) {
+    if (!w || !w.traffic || !w.phys) return;
+    var f = w.C.AIRFIELDS.halcyon;
+    var T = w.traffic;
+    if (T.taxi) { T.taxi.tr = w.phys.makeTraffic(w.C, "taxi", f.x + 40, -1); T.taxi.g.position.set(T.taxi.tr.x, f.elev, T.taxi.tr.z); T.taxi.g.rotation.y = T.taxi.tr.heading; }
+    if (T.truck) { T.truck.tr = w.phys.makeTraffic(w.C, "truck", f.x - 155, 1); T.truck.g.position.set(T.truck.tr.x, f.elev, T.truck.tr.z); T.truck.g.rotation.y = T.truck.tr.heading; }
+    if (T.cart) { T.cart.tr = w.phys.makeTraffic(w.C, "cart", f.x - 68, 1); T.cart.g.position.set(T.cart.tr.x, f.elev, T.cart.tr.z); T.cart.g.rotation.y = T.cart.tr.heading; }
   }
 
   function update(w, dt, t, quality) {
     updateOcean(w.ocean, t, quality);
+    // clouds ride the same wind the HUD shows: the gust swell hurries
+    // and slows the drift, so the sky never looks frozen
+    var gust = 0;
+    if (w.phys && w.C) gust = w.phys.windAt(w.C, t).gust;
     for (var i = 0; i < w.clouds.length; i++) {
       var c = w.clouds[i];
-      c.sp.position.x += c.v * dt;
+      c.sp.position.x += c.v * (1 + 0.3 * gust) * dt;
       if (c.sp.position.x > 2000) c.sp.position.x = -2000;
+    }
+    // ground traffic: taxiing aircraft, fuel truck, baggage cart
+    if (w.traffic && w.phys) {
+      var keys = ["taxi", "truck", "cart"];
+      for (var k = 0; k < keys.length; k++) {
+        var veh = w.traffic[keys[k]];
+        if (!veh) continue;
+        w.phys.trafficStep(veh.tr, dt);
+        veh.g.position.x = veh.tr.x;
+        veh.g.rotation.y = veh.tr.heading;
+      }
+    }
+    // windsocks stream downwind and sway with the gusts
+    if (w.windsocks) {
+      for (var ws = 0; ws < w.windsocks.length; ws++) {
+        var sock = w.windsocks[ws];
+        if (sock && sock.userData.baseZ !== undefined) {
+          sock.rotation.z = sock.userData.baseZ + Math.sin(t * 0.9 + ws * 2.1) * 0.03 + gust * 0.07;
+        }
+      }
     }
     for (var j = 0; j < w.rings.length; j++) {
       var r = w.rings[j];
@@ -976,6 +1137,6 @@
     w.particles.update(dt);
   }
 
-  var api = { build: build, update: update };
+  var api = { build: build, update: update, setNight: setNight, resetTraffic: resetTraffic };
   global.SkylaneWorld = api;
 })(typeof window !== "undefined" ? window : globalThis);

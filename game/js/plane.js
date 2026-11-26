@@ -36,6 +36,26 @@
     return new THREE.CanvasTexture(cv);
   }
 
+  // Wing skin: cream with rib stations, a gold stripe and rivet rows,
+  // so the wing reads as built metal up close instead of a flat slab.
+  function wingTexture() {
+    var cv = document.createElement("canvas");
+    cv.width = 256; cv.height = 128;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#f3ead6"; g.fillRect(0, 0, 256, 128);
+    g.fillStyle = "#e8a91c"; g.fillRect(0, 8, 256, 10);
+    g.strokeStyle = "rgba(20,49,61,0.35)"; g.lineWidth = 2;
+    for (var x = 32; x < 256; x += 32) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 128); g.stroke();
+    }
+    g.fillStyle = "rgba(20,49,61,0.4)";
+    for (var rx = 16; rx < 256; rx += 32)
+      for (var ry = 30; ry < 128; ry += 24) g.fillRect(rx, ry, 2, 2);
+    g.fillStyle = "rgba(15,111,106,0.16)";
+    g.fillRect(0, 100, 256, 28);
+    return new THREE.CanvasTexture(cv);
+  }
+
   function buildPlane() {
     var group = new THREE.Group();
     var cream = new THREE.MeshStandardMaterial({ color: 0xf3ead6, roughness: 0.45, metalness: 0.25 });
@@ -77,9 +97,11 @@
     group.add(yoke);
 
     // wings: tapered boxes with slight dihedral, teal tips
+    var wingTex = wingTexture();
+    var wingMat = new THREE.MeshStandardMaterial({ map: wingTex, roughness: 0.4, metalness: 0.3 });
     function wing(side) {
       var w = new THREE.Group();
-      var panel = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.14, 1.25), cream);
+      var panel = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.14, 1.25), wingMat);
       panel.position.x = side * 1.95;
       panel.castShadow = true;
       w.add(panel);

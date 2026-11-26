@@ -5,7 +5,7 @@
 // Runs on Node 22 with the standard library only; no network, no installs.
 // Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { buildDossier } from "./vendor/makefun-game.ts";
@@ -39,7 +39,12 @@ function main(): void {
   const shotFiles = countFiles(join(OUT_DIR, "screenshots"));
 
   const dossier = buildDossier(OUT_DIR, { text_max_bytes: TEXT_MAX_BYTES });
-  writeFileSync(join(OUT_DIR, "dossier.json"), Buffer.from(dossier));
+  // explicit 0644 via chmod (a mode argument to writeFileSync is
+  // still masked by the process umask): the harness may run under
+  // any umask, and the dossier must come out 0644 either way
+  const dossierPath = join(OUT_DIR, "dossier.json");
+  writeFileSync(dossierPath, Buffer.from(dossier));
+  chmodSync(dossierPath, 0o644);
   console.log(`Skylane Archipelago: copied ${gameFiles} game files, ${shotFiles} screenshots`);
   console.log(`dossier.json: ${dossier.byteLength} bytes`);
 }

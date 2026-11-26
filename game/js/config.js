@@ -55,8 +55,22 @@
 
   // Wind: steady sea breeze from the west, so runway 27 is the
   // into-wind runway and the windsock streams east, matching the
-  // WIND readout on the HUD.
-  C.WIND = { fromDeg: 270, speedKt: 8 };
+  // WIND readout on the HUD. gustKt: the gust band on top of the
+  // steady wind — physics.windAt() turns it into a slow, deterministic
+  // swell that pushes the plane around and swings the windsock.
+  C.WIND = { fromDeg: 270, speedKt: 8, gustKt: 6 };
+
+  // Ground traffic paths at Halcyon Field, relative to the field
+  // centre (dx along the runway axis, dz across it): one aircraft
+  // taxiing the parallel taxiway, a fuel truck working the apron and
+  // a baggage cart shuttling between the terminal and the parked
+  // planes. The stepper lives in physics (pure, tested); world.js
+  // only moves the meshes.
+  C.TRAFFIC = {
+    taxi: { dxMin: -150, dxMax: 210, dz: 55, speed: 6, nose: "z-" },
+    truck: { dxMin: -155, dxMax: 40, dz: 110, speed: 3, nose: "x+" },
+    cart: { dxMin: -68, dxMax: -18, dz: 102, speed: 1.5, nose: "x+" },
+  };
 
   // Graded apron pad south of Halcyon runway: taxiway, apron,
   // terminal and hangar all sit on ground flattened to field
@@ -112,7 +126,7 @@
     crateMax: 150,
     landingMax: 200,
     timeBonusMax: 300,
-    parTime: { gate: 150, hop: 240, drop: 210, free: 0 },
+    parTime: { gate: 150, hop: 240, drop: 210, free: 0, night: 150, emergency: 120 },
   };
 
   // ---- missions ---------------------------------------------------------------
@@ -140,6 +154,20 @@
       brief: "No clock, no course. Cruise the golden hour, carve the ridges, and grease a landing when you feel like it.",
       short: "Fly free — enjoy the golden hour",
       short2: "Land anywhere to finish",
+    },
+    {
+      id: "night", num: 5, name: "Night Run — Lights Out",
+      brief: "Thread 4 rings in the dark, then follow the runway lights home to Halcyon Field. The PAPI and the edge lights are your only friends.",
+      short: "Fly all 4 night rings (0/4)",
+      short2: "Land at Halcyon Field, guided by the lights",
+      rings: 4, night: true,
+    },
+    {
+      id: "emergency", num: 6, name: "Mayday — Fuel Leak",
+      brief: "Fuel is leaking and the gauge is falling fast. Get the Kestrel-9 on the ground — any strip, any field — before the engine quits.",
+      short: "Land NOW — fuel leaking",
+      short2: "Any safe landing counts",
+      fuelStart: 0.35, fuelLeak: 1 / 360,
     },
   ];
 

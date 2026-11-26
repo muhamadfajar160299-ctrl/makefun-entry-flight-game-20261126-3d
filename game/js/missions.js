@@ -17,11 +17,15 @@
     return {
       id: def.id, def: def, started: false, done: false,
       time: 0, score: 0, ringsHit: 0, cratesHit: 0, cratesDropped: 0,
-      landings: [], hopsDone: 0, nextRing: 0,
+      landings: [], hopsDone: 0, nextRing: 0, fuelPct: 1,
       crates: [], // falling crates {x,y,z,vx,vy,vz}
       message: "", messageT: 0, events: [],
     };
   }
+
+  // How many rings this mission asks for: the night run threads only
+  // the first 4, the gate run all 8.
+  function ringTotal(C, m) { return m.def.rings || C.RINGS.length; }
 
   function start(C, m) {
     m.started = true; m.time = 0; m.score = 0;
@@ -46,13 +50,20 @@
 
   // Current navigation target: {x,y,z,label,kind} or null.
   function currentTarget(C, m) {
-    if (m.id === "gate") {
-      if (m.nextRing < C.RINGS.length) {
+    if (m.id === "gate" || m.id === "night") {
+      var total = ringTotal(C, m);
+      if (m.nextRing < total) {
         var r = C.RINGS[m.nextRing];
         return { x: r.x, y: r.y, z: r.z, label: "RING " + (m.nextRing + 1), kind: "ring", r: r.r };
       }
       var f = C.AIRFIELDS.halcyon;
       return { x: f.x, y: f.elev + 2, z: f.z, label: "HALCYON FIELD", kind: "land", r: 60 };
+    }
+    if (m.id === "emergency") {
+      // Halcyon is home and the Mayday starts on its runway, so the
+      // nearest strip is always the one under the plane's nose
+      var hal = C.AIRFIELDS.halcyon;
+      return { x: hal.x, y: hal.elev + 2, z: hal.z, label: "HALCYON FIELD — LAND NOW", kind: "land", r: 60 };
     }
     if (m.id === "hop") {
       var want = m.hopsDone === 0 ? C.AIRFIELDS.northCay : C.AIRFIELDS.halcyon;
@@ -92,17 +103,19 @@
     if (!m.started || m.done) return;
     m.time += dt;
     if (m.messageT > 0) m.messageT -= dt;
+    m.fuelPct = s.fuel;
 
-    // --- ring passes (Golden Gate) -------------------------------------------
-    if (m.id === "gate" && m.nextRing < C.RINGS.length) {
+    // --- ring passes (Golden Gate + Night Run) --------------------------------
+    if ((m.id === "gate" || m.id === "night") && m.nextRing < ringTotal(C, m)) {
       var r = C.RINGS[m.nextRing];
       var d = dist3(s, r);
       if (d < r.r + 2.5) {
         m.ringsHit++; m.nextRing++;
         m.score += C.SCORE.ring;
         m.events.push({ type: "ring", n: m.ringsHit, score: m.score });
-        if (m.nextRing >= C.RINGS.length) say(m, "All 8 rings! Now land at Halcyon Field.", 6);
-        else say(m, "Ring " + m.ringsHit + " of 8 — +" + C.SCORE.ring + " pts", 3);
+        var total = ringTotal(C, m);
+        if (m.nextRing >= total) say(m, "All " + total + " rings! Now land at Halcyon Field.", 6);
+        else say(m, "Ring " + m.ringsHit + " of " + total + " — +" + C.SCORE.ring + " pts", 3);
       }
     }
 
@@ -131,11 +144,19 @@
     // --- physics events ---------------------------------------------------------
     for (var j = 0; j < evts.length; j++) {
       var e = evts[j];
-      if (e.type === "touchdown") {
+      if (e.type === "fuel-low") {
+        say(m, "LOW FUEL — " + Math.round(s.fuel * 100) + "% left. Land soon!", 6);
+      } else if (e.type === "fuel-empty") {
+        say(m, "ENGINE OUT — glide to the nearest strip!", 8);
+      } else if (e.type === "touchdown") {
         m.landings.push({ quality: e.quality, field: e.field });
-        if (m.id === "gate") {
-          if (m.nextRing >= C.RINGS.length && e.field === "HAL") finish(C, m, e.quality);
+        if (m.id === "gate" || m.id === "night") {
+          if (m.nextRing >= ringTotal(C, m) && e.field === "HAL") finish(C, m, e.quality);
           else say(m, "Landed — but the rings come first. Take off and keep flying!", 5);
+        } else if (m.id === "emergency") {
+          // Mayday: any survivable touchdown counts — the strip, a
+          // field, the beach. Surviving IS the mission.
+          finish(C, m, e.quality);
         } else if (m.id === "hop") {
           var want = m.hopsDone === 0 ? "NCY" : "HAL";
           if (e.field === want) {
@@ -158,6 +179,7 @@
       } else if (e.type === "gear-up-landing") {
         m.events.push({ type: "gear-up-landing", quality: e.quality });
         say(m, "Gear-up landing! The belly took a beating.", 5);
+        if (m.id === "emergency") finish(C, m, e.quality);
       }
     }
   }
@@ -177,6 +199,8 @@
 
   function progressText(C, m) {
     if (m.id === "gate") return { a: "Fly all 8 golden rings (" + m.ringsHit + "/8)", b: "Land at Halcyon Field", doneA: m.ringsHit >= 8, doneB: m.done };
+    if (m.id === "night") return { a: "Fly all 4 night rings (" + m.ringsHit + "/4)", b: "Land at Halcyon Field, guided by the lights", doneA: m.ringsHit >= 4, doneB: m.done };
+    if (m.id === "emergency") return { a: "MAYDAY — land at the nearest strip", b: "Fuel " + Math.round((m.fuelPct !== undefined ? m.fuelPct : 1) * 100) + "% — leaking fast", doneA: false, doneB: m.done };
     if (m.id === "hop") return { a: "Land at North Cay Strip (" + Math.min(m.hopsDone, 1) + "/1)", b: "Return and land at Halcyon Field", doneA: m.hopsDone >= 1, doneB: m.done };
     if (m.id === "drop") return { a: "Drop crates on the harbor targets (" + m.cratesHit + "/3)", b: "Land at Halcyon Field (optional)", doneA: m.cratesHit >= 3, doneB: m.done };
     return { a: "Fly free — enjoy the golden hour", b: "Land anywhere to finish", doneA: false, doneB: m.done };

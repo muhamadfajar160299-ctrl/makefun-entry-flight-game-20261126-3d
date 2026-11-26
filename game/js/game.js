@@ -48,7 +48,7 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.12;
 
     var scene = new THREE.Scene();
     var camera = new THREE.PerspectiveCamera(62, 1, 0.5, 8000);
@@ -113,6 +113,20 @@
     function startMission(id) {
       resetPlane();
       game.mission = Missions.makeMission(C, id);
+      // mission-specific aircraft state: the Mayday starts on a
+      // leaking tank, the Night Run starts in the dark
+      var def = game.mission.def;
+      if (def.fuelStart !== undefined) s.fuel = def.fuelStart;
+      if (def.fuelLeak) s.fuelLeak = def.fuelLeak;
+      if (def.night) {
+        SkylaneWorld.setNight(world, true);
+        renderer.toneMappingExposure = 0.85;
+      } else {
+        SkylaneWorld.setNight(world, false);
+        renderer.toneMappingExposure = 1.12;
+      }
+      // every sortie starts with the same traffic picture
+      SkylaneWorld.resetTraffic(world);
       Missions.start(C, game.mission);
       game.state = "flying";
       game.camMode = "chase";
@@ -129,6 +143,8 @@
       game.state = "menu";
       game.mission = null;
       game.autopilot = false;
+      SkylaneWorld.setNight(world, false);
+      renderer.toneMappingExposure = 1.12;
       $("hud").classList.add("hidden");
       $("pause").classList.add("hidden");
       $("endcard").classList.add("hidden");
@@ -155,6 +171,8 @@
       if (m.id === "drop") goalLine = "Crates on target " + m.cratesHit + " / 3";
       else if (m.id === "hop") goalLine = "Landings " + m.landings.length + " / 2";
       else if (m.id === "free") goalLine = "Landings " + m.landings.length;
+      else if (m.id === "night") goalLine = "Night rings " + m.ringsHit + " / 4";
+      else if (m.id === "emergency") goalLine = "Emergency landing — survived on " + Math.round(m.fuelPct * 100) + "% fuel";
       else goalLine = "Rings " + m.ringsHit + " / 8";
       var lines = [
         "Mission time " + SkylaneHud.fmtTime(m.time),
@@ -208,6 +226,8 @@
         else if (e.code === "Digit2") startMission("hop");
         else if (e.code === "Digit3") startMission("drop");
         else if (e.code === "Digit4") startMission("free");
+        else if (e.code === "Digit5") startMission("night");
+        else if (e.code === "Digit6") startMission("emergency");
         else if (e.code === "Enter") startMission(selMission);
         return;
       }
@@ -324,23 +344,26 @@
       startMission(missionId);
       var f = C.AIRFIELDS.halcyon;
       if (staging === "cover") {
-        // ring 3 -> 4 leg, heading 310 deg: straight into the low sun.
-        // Plane 150 m out from ring 4, chase cam behind it.
-        // Staged mid-mission state must read consistently: 3 rings
-        // already banked (300 pts) after ~1:35 of flying; ring 4 pays
-        // out the instant it is threaded, so the frozen shot reads
-        // 4/8, SCORE 400, ~1:40 — never 0.
-        Missions.presetProgress(C, game.mission, 3, 95);
-        markRingsPassed(3);
-        resetPlane({ x: -735, y: 113, z: 296, heading: -0.87 });
+        // PEAK MOMENT, not a title screen: low final approach onto
+        // runway 27 at golden hour, gear down, flaps out, the whole
+        // rally already behind the plane — 8 rings banked (800 pts)
+        // after ~3:05 of flying, so the shot reads as the end of a
+        // real rally. The frame holds the runway ahead, the PAPI row
+        // on the right, the terminal and the taxiing Kestrel on the
+        // left, and the tower beyond. Freeze just past the threshold.
+        Missions.presetProgress(C, game.mission, 8, 185);
+        markRingsPassed(8);
+        game.mission.messageT = 0;
+        resetPlane({ x: f.x + 300, y: f.elev + 30, z: f.z + 6, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
-        s.vx = -32.1; s.vy = -0.7; s.vz = -27;
-        s.throttle = 0.85;
+        s.vx = -34; s.vy = -1.5; s.vz = 0;
+        s.throttle = 0.4;
+        s.gearDown = true; s.flaps = 2;
         game.autopilot = true;
         game.camMode = "chase";
         // snap the chase camera in behind the plane at once
-        camPos.set(-725, 116.5, 304);
-        camLook.set(-746, 113, 287);
+        camPos.set(f.x + 322, f.elev + 34.5, f.z + 14);
+        camLook.set(f.x + 290, f.elev + 29, f.z + 5);
       } else if (staging === "cockpit") {
         // Level cruise over open water east of ring 1, at the ring's own
         // altitude, heading straight at it: no dive, no bank, and only
@@ -417,11 +440,11 @@
         // plane reads big AND the ring it just threaded still frames it
         // (a tight chase loses the ring the moment the plane passes it).
         var tight = game.staging === "cover";
-        var back = tight ? 26 : 11 + s.speed * 0.04, up = tight ? 5 : 3.2 + s.speed * 0.008;
+        var back = tight ? 17 : 11 + s.speed * 0.04, up = tight ? 3.8 : 3.2 + s.speed * 0.008;
         // cover: sit slightly to the sun side so the plane reads in
-        // three-quarter view instead of dead-astern (a tail-on plane
-        // inside a giant ring looks like a speck)
-        var side = tight ? 8 : 0;
+        // three-quarter view instead of dead-astern, big in frame with
+        // the runway, PAPI and terminal ahead of it
+        var side = tight ? 5 : 0;
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -496,13 +519,15 @@
           if (s.crashed) break;
         }
         if (n >= 60) acc = 0;
-        // Cover staging: freeze the instant the plane threads ring 4
-        // (ringsHit 4, SCORE 400, "Ring 4 of 8 — +100 pts" toast up) so
-        // the shot shows real progress with the ring still framing the
-        // plane. The plane is inside the ring at that moment and the
-        // chase camera sits 26 m behind it, so the ring still frames
-        // the shot instead of being left behind.
-        if (game.staging === "cover" && !game.coverPreFrozen && game.mission && game.mission.ringsHit === 4) {
+        // Cover staging: freeze just past the threshold on final
+        // (low over runway 27, gear down, PAPI + terminal + taxiing
+        // traffic in frame) so the shot is the peak moment of the
+        // rally — 8 rings banked, SCORE 800. The agl bound is only an
+        // upper sanity check: the plane is sinking fast on final, so
+        // no lower bound — it must freeze before touchdown, and the
+        // clock fallback covers a dragged approach.
+        if (game.staging === "cover" && !game.coverPreFrozen && game.mission &&
+          ((s.x < 105 && s.agl < 60) || game.mission.time > 215)) {
           game.coverPreFrozen = true;
           game.state = "paused";
         }
