@@ -135,6 +135,7 @@
       $("endcard").classList.add("hidden");
       $("pause").classList.add("hidden");
       $("hud").classList.remove("hidden");
+      $("hud-mission").classList.remove("hidden");
       $("cockpit-frame").classList.add("hidden");
       audio.ensure();
     }
@@ -155,6 +156,10 @@
 
     function showEnd(title, detail, lines, score) {
       game.state = title.indexOf("CRASH") === 0 ? "crashed" : "complete";
+      // ANGLE FIX (v5): the end card docks to the left now, so the
+      // mission checklist (top-left) is hidden while the card is up —
+      // otherwise the two panels overlap. Restored in startMission.
+      $("hud-mission").classList.add("hidden");
       $("end-title").textContent = title;
       $("end-detail").textContent = detail;
       $("end-score").textContent = "SCORE " + score;
@@ -362,8 +367,8 @@
         game.autopilot = true;
         game.camMode = "chase";
         // snap the chase camera in behind the plane at once
-        camPos.set(f.x + 322, f.elev + 34.5, f.z + 14);
-        camLook.set(f.x + 290, f.elev + 29, f.z + 5);
+        camPos.set(f.x + 313, f.elev + 33, f.z - 2);
+        camLook.set(f.x + 280, f.elev + 32, f.z + 6);
       } else if (staging === "cockpit") {
         // Level cruise over open water east of ring 1, at the ring's own
         // altitude, heading straight at it: no dive, no bank, and only
@@ -384,10 +389,16 @@
         // All 8 rings banked on the way here (800 pts) after ~3:05 of
         // flying — the shot must read as the end of a real rally, not a
         // teleport with a zero score.
+        // ANGLE FIX (v5): start further out (620 m east, 62 m up) and
+        // capture earlier (~480 m out, ~27 m AGL) so the runway, PAPI
+        // and terminal still read ahead of the plane. The v4 attempt to
+        // capture closer (<220 m) timed out because the Kestrel sinks
+        // onto the runway before 220 m — so the plane is made bigger
+        // with a closer chase + narrower FOV instead (updateCamera).
         Missions.presetProgress(C, game.mission, 8, 185);
         markRingsPassed(8);
         game.mission.messageT = 0;
-        resetPlane({ x: f.x + 380, y: f.elev + 38, z: f.z + 12, heading: -Math.PI / 2 });
+        resetPlane({ x: f.x + 620, y: f.elev + 62, z: f.z + 12, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -34; s.vy = -1.5; s.vz = 0;
         s.throttle = 0.35;
@@ -429,22 +440,48 @@
       tmpF.set(Math.sin(s.heading) * Math.cos(s.pitch), Math.sin(s.pitch), -Math.cos(s.heading) * Math.cos(s.pitch));
       tmpU.set(0, 1, 0);
       if (game.camMode === "cockpit") {
-        tmpV.set(0, 1.25, -1.35).applyQuaternion(quat).add(planeObj.group.position);
-        camera.position.copy(tmpV);
-        tmpV.copy(tmpF).multiplyScalar(30).add(camera.position);
-        camera.lookAt(tmpV);
-        camera.fov = lerp(camera.fov, 66, ldt * 4);
+        if (game.staging === "cockpit") {
+          // ANGLE FIX (v5): the in-cockpit camera showed no aircraft at
+          // all — just a vista. Pull back to a close chase from
+          // behind-above so the nose, wings and livery read in frame,
+          // while the gauge strip + canopy vignette still sell the
+          // cockpit shot. Blades stay hidden and the prop disc capped
+          // (frame loop) so the v2 glitch cannot return. First pass at
+          // 8 m was too tight (plane ~55% of the frame, tail fin
+          // crowding the left edge) — 11 m puts it at ~a third, like
+          // the landing shot, with the sea and the ring ahead in view.
+          tmpV.set(2.0, 2.8, 11).applyQuaternion(quat).add(planeObj.group.position);
+          camera.position.copy(tmpV);
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 26);
+          tmpV.y -= 1.0;
+          camera.lookAt(tmpV);
+          camera.fov = lerp(camera.fov, 58, ldt * 4);
+        } else {
+          tmpV.set(0, 1.25, -1.35).applyQuaternion(quat).add(planeObj.group.position);
+          camera.position.copy(tmpV);
+          tmpV.copy(tmpF).multiplyScalar(30).add(camera.position);
+          camera.lookAt(tmpV);
+          camera.fov = lerp(camera.fov, 66, ldt * 4);
+        }
       } else {
         // chase: behind and above, roll damped, look offset for mouse look.
         // The cover staging keeps the camera glued and pulled back so the
         // plane reads big AND the ring it just threaded still frames it
         // (a tight chase loses the ring the moment the plane passes it).
         var tight = game.staging === "cover";
-        var back = tight ? 17 : 11 + s.speed * 0.04, up = tight ? 3.8 : 3.2 + s.speed * 0.008;
+        // ANGLE FIX (v5): landing + complete get a close chase of their
+        // own — the old 12 m chase left the plane ~10% of the frame over
+        // a sea of grass. Back 9.5 m + a 52 deg FOV puts the Kestrel at
+        // ~a third of the frame with the runway and the airport ahead.
+        // Cover moves closer too (17 -> 13.5 m) with more side offset so
+        // the 3/4 view shows the nose and livery, not just the tail.
+        var landTight = game.staging === "landing" || game.staging === "complete";
+        var back = tight ? 13.5 : (landTight ? 9.5 : 11 + s.speed * 0.04),
+          up = tight ? 3.2 : (landTight ? 2.6 : 3.2 + s.speed * 0.008);
         // cover: sit slightly to the sun side so the plane reads in
         // three-quarter view instead of dead-astern, big in frame with
         // the runway, PAPI and terminal ahead of it
-        var side = tight ? 5 : 0;
+        var side = tight ? 8 : (landTight ? 2.5 : 0);
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -454,8 +491,13 @@
         // the autopilot pitches up for the next ring; normal chase looks
         // 14 m ahead down the flight path
         if (tight) {
-          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 16);
-          tmpV.y += 0.5;
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 20);
+          tmpV.y += 2.0;
+        } else if (landTight) {
+          // look further ahead and a touch higher so the runway and the
+          // airport fill the frame instead of the grass below the plane
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 18);
+          tmpV.y += 2.0;
         } else {
           tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 14);
           tmpV.y += 1.2;
@@ -467,7 +509,7 @@
         var k2 = 1 - Math.exp(-ldt * 7);
         camLook.lerp(tmpV, k2);
         camera.lookAt(camLook);
-        var wantFov = 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
+        var wantFov = landTight ? 52 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
         camera.fov = lerp(camera.fov, wantFov, ldt * 3);
       }
       camera.updateProjectionMatrix();

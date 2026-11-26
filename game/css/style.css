@@ -89,8 +89,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1622;
 .overlay { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
   background: linear-gradient(rgba(6, 12, 22, .45), rgba(6, 12, 22, .72)); }
 /* the end card dims the scene far less than the menu: the runway and the
-   landscape behind a MISSION COMPLETE must stay bright and readable */
-#endcard { background: linear-gradient(rgba(6, 12, 22, .26), rgba(6, 12, 22, .46)); }
+   landscape behind a MISSION COMPLETE must stay bright and readable.
+   ANGLE FIX (v5): dimming halved again (.12/.24) and the card docks to
+   the left, so the landed Kestrel reads beside it instead of behind it */
+#endcard { background: linear-gradient(rgba(6, 12, 22, .12), rgba(6, 12, 22, .24));
+  justify-content: flex-start; padding-left: 48px; }
 .panel { background: rgba(8, 18, 32, .82); border: 1px solid rgba(255, 215, 106, .35); border-radius: 16px;
   padding: 30px 38px; max-width: 660px; width: min(92vw, 660px); text-align: center;
   box-shadow: 0 18px 60px rgba(0, 0, 0, .55); backdrop-filter: blur(4px); }
