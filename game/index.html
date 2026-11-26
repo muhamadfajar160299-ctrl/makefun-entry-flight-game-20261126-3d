@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skylane Archipelago — Island Air Rally</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="scene-wrap"><canvas id="scene"></canvas></div>
+
+<!-- vignette + speed tint -->
+<div id="vignette"></div>
+<div id="speedfx"></div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <div id="hud-speed">
+    <div class="hud-label">SPD</div>
+    <div class="hud-big"><span id="hud-kts">0</span><span class="hud-unit"> KT</span></div>
+    <div id="thr-bar"><div id="thr-fill"></div></div>
+    <div class="hud-sub"><span id="hud-thr">THR 0%</span><span id="hud-flap"></span></div>
+  </div>
+
+  <div id="hud-compass">
+    <div id="tape"><div id="tape-inner"></div></div>
+    <div id="tape-needle">▼</div>
+    <div id="hud-hdg">000°</div>
+    <div id="hud-target">▲ <span id="hud-target-label">—</span> <span id="hud-target-dist">—</span></div>
+  </div>
+
+  <div id="hud-alt">
+    <div class="hud-label">ALT</div>
+    <div class="hud-big"><span id="hud-ft">0</span><span class="hud-unit"> FT</span></div>
+    <div class="hud-sub">AGL <span id="hud-agl">0</span> FT</div>
+    <div class="hud-sub">V/S <span id="hud-vs">+0</span> FPM</div>
+  </div>
+
+  <div id="hud-mission">
+    <div id="hud-mission-name">Golden Gate Run</div>
+    <div class="hud-obj"><span class="hud-dot" id="hud-dot-a">○</span> <span id="hud-obj-a"></span></div>
+    <div class="hud-obj"><span class="hud-dot" id="hud-dot-b">○</span> <span id="hud-obj-b"></span></div>
+  </div>
+
+  <div id="hud-lower-left">
+    <div class="hud-meter"><span class="hud-meter-label">FUEL</span><div class="hud-meter-bar"><div id="fuel-fill"></div></div><span id="fuel-pct"></span></div>
+    <div class="hud-meter"><span class="hud-meter-label">DMG</span><div class="hud-meter-bar"><div id="dmg-fill"></div></div><span id="hud-gear">GEAR DOWN</span></div>
+    <div id="hud-score-line">SCORE <span id="hud-score">0</span> &nbsp;·&nbsp; <span id="hud-time">0:00</span></div>
+  </div>
+
+  <div id="hud-att">
+    <canvas id="att-canvas" width="180" height="180"></canvas>
+    <div class="hud-label att-label">ATT</div>
+  </div>
+
+  <div id="hud-message"></div>
+  <div id="hud-stall" class="hidden">⚠ STALL — NOSE DOWN, FULL THROTTLE ⚠</div>
+  <div id="hud-center">＋</div>
+</div>
+
+<!-- cockpit canopy frame (cockpit camera only) -->
+<div id="cockpit-frame" class="hidden">
+  <div id="cockpit-dash">
+    <div class="cockpit-gauge"><span class="cg-label">RPM</span><span class="cg-val" id="cg-rpm">0</span></div>
+    <div class="cockpit-gauge"><span class="cg-label">KT</span><span class="cg-val" id="cg-kts">0</span></div>
+    <div class="cockpit-gauge"><span class="cg-label">ALT FT</span><span class="cg-val" id="cg-alt">0</span></div>
+    <div class="cockpit-gauge"><span class="cg-label">HDG</span><span class="cg-val" id="cg-hdg">000</span></div>
+    <div class="cockpit-gauge"><span class="cg-label">FUEL</span><span class="cg-val" id="cg-fuel">100%</span></div>
+  </div>
+</div>
+
+<!-- ============ MENU ============ -->
+<div id="menu" class="overlay">
+  <div class="panel">
+    <div class="menu-eyebrow">HALCYON ISLES · GOLDEN HOUR</div>
+    <h1>SKYLANE<br>ARCHIPELAGO</h1>
+    <div class="menu-sub">Island Air Rally — fly the Kestrel-9</div>
+    <div id="mission-list"></div>
+    <div class="menu-controls">
+      <b>W/S</b> throttle · <b>↑/↓</b> pitch · <b>←/→</b> roll · <b>A/D</b> rudder ·
+      <b>G</b> gear · <b>F</b> flaps · <b>C</b> camera · <b>Space</b> drop crate ·
+      <b>P</b> pause · mouse: look / steer assist
+    </div>
+    <div class="menu-note">Static files, no network. Best in desktop Chrome.</div>
+  </div>
+</div>
+
+<!-- ============ PAUSE ============ -->
+<div id="pause" class="overlay hidden">
+  <div class="panel small">
+    <h2>PAUSED</h2>
+    <div class="menu-sub">Press P or Esc to keep flying</div>
+    <button id="btn-resume" type="button">RESUME</button>
+    <button id="btn-quit" type="button">QUIT TO MENU</button>
+  </div>
+</div>
+
+<!-- ============ COMPLETE / CRASH ============ -->
+<div id="endcard" class="overlay hidden">
+  <div class="panel small">
+    <h2 id="end-title">MISSION COMPLETE</h2>
+    <div id="end-detail" class="menu-sub"></div>
+    <div id="end-score">SCORE 0</div>
+    <div id="end-lines"></div>
+    <button id="btn-again" type="button">FLY AGAIN (R)</button>
+    <button id="btn-menu" type="button">CHANGE MISSION</button>
+  </div>
+</div>
+
+<div id="nogl" class="overlay hidden">
+  <div class="panel small"><h2>WEBGL UNAVAILABLE</h2>
+  <div class="menu-sub">This game needs WebGL. Please open it in desktop Chrome with hardware acceleration on.</div></div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/missions.js"></script>
+<script src="js/world.js"></script>
+<script src="js/plane.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/hud.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

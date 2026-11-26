@@ -1,0 +1,527 @@
+// game.js — main loop, input, cameras, states and staging.
+// Wires physics + missions + world + plane + audio + HUD together.
+// Staging (?staging=cover|cockpit|landing|complete) puts the live game in
+// a screenshot-ready state; window.__skylane exposes the live state.
+(function (global) {
+  "use strict";
+
+  var C = global.SKYLANE_CONFIG;
+  var Phys = global.SkylanePhysics;
+  var Missions = global.SkylaneMissions;
+
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function startPose() {
+    var f = C.AIRFIELDS.halcyon;
+    return { x: f.x - 205, y: f.elev, z: f.z, heading: f.headingDeg * Math.PI / 180 };
+  }
+
+  function makeGame() {
+    var canvas = $("scene");
+    // Adaptive quality: software rasterizers (SwiftShader/llvmpipe) get a
+    // lighter load so the game still runs; real GPUs get full quality.
+    var softwareGL = false;
+    try {
+      var probe = document.createElement("canvas").getContext("webgl");
+      var dbg = probe && probe.getExtension("WEBGL_debug_renderer_info");
+      var rend = dbg && probe.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+      softwareGL = !!rend && /swiftshader|llvmpipe|software|basic render/i.test(rend);
+      if (probe) { var lose = probe.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext(); }
+    } catch (e) { softwareGL = false; }
+    var renderer = null;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: !softwareGL });
+    } catch (e) {
+      $("nogl").classList.remove("hidden");
+      $("menu").classList.add("hidden");
+      return null;
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, softwareGL ? 1 : 1.5));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(62, 1, 0.5, 8000);
+    var world = SkylaneWorld.build(scene, C, Phys, softwareGL ? "low" : "high");
+    var quality = softwareGL ? "low" : "high";
+    var planeObj = SkylanePlane.buildPlane();
+    scene.add(planeObj.group);
+    scene.add(planeObj.trailL.line);
+    scene.add(planeObj.trailR.line);
+    var audio = SkylaneAudio.makeAudio();
+    var hud = SkylaneHud.makeHud(C);
+
+    var game = {
+      state: "menu", mission: null, camMode: "chase",
+      time: 0, staging: null, autopilot: false,
+      lookYaw: 0, lookPitch: 0, pointerLocked: false,
+    };
+    var s = null; // physics state
+    var input = { throttleDelta: 0, throttleSet: null, pitch: 0, roll: 0, yaw: 0, gearToggle: false, flapToggle: false, brake: false };
+    var keys = {};
+    var crates = []; // {mesh, chute}
+    var camPos = new THREE.Vector3(0, 40, 40);
+    var camLook = new THREE.Vector3(0, 30, 0);
+    var lastStallBeep = 0;
+
+    function resize() {
+      var w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // ---- menu ---------------------------------------------------------------
+    var selMission = "gate";
+    function buildMenu() {
+      var list = $("mission-list");
+      list.innerHTML = "";
+      C.MISSIONS.forEach(function (m) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "mission-row" + (m.id === selMission ? " sel" : "");
+        b.innerHTML = '<span class="m-num">' + m.num + '</span><span><span class="m-name">' +
+          m.name + '</span><br><span class="m-brief">' + m.brief + "</span></span>";
+        b.addEventListener("click", function () { selMission = m.id; audio.ensure(); audio.click(); startMission(m.id); });
+        list.appendChild(b);
+      });
+    }
+    buildMenu();
+
+    function resetPlane(pose) {
+      s = Phys.makeState(C, pose || startPose());
+      s.throttle = 0;
+      planeObj.group.position.set(s.x, s.y, s.z);
+      planeObj.group.rotation.set(0, 0, 0);
+      planeObj.trailL.pts.length = 0;
+      planeObj.trailR.pts.length = 0;
+      clearCrates();
+    }
+
+    function startMission(id) {
+      resetPlane();
+      game.mission = Missions.makeMission(C, id);
+      Missions.start(C, game.mission);
+      game.state = "flying";
+      game.camMode = "chase";
+      game.lookYaw = 0; game.lookPitch = 0;
+      $("menu").classList.add("hidden");
+      $("endcard").classList.add("hidden");
+      $("pause").classList.add("hidden");
+      $("hud").classList.remove("hidden");
+      $("cockpit-frame").classList.add("hidden");
+      audio.ensure();
+    }
+
+    function quitToMenu() {
+      game.state = "menu";
+      game.mission = null;
+      game.autopilot = false;
+      $("hud").classList.add("hidden");
+      $("pause").classList.add("hidden");
+      $("endcard").classList.add("hidden");
+      $("cockpit-frame").classList.add("hidden");
+      $("menu").classList.remove("hidden");
+      buildMenu();
+    }
+
+    function showEnd(title, detail, lines, score) {
+      game.state = title.indexOf("CRASH") === 0 ? "crashed" : "complete";
+      $("end-title").textContent = title;
+      $("end-detail").textContent = detail;
+      $("end-score").textContent = "SCORE " + score;
+      $("end-lines").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+      $("endcard").classList.remove("hidden");
+    }
+
+    function endMissionComplete() {
+      var m = game.mission;
+      var lines = [
+        "Mission time " + SkylaneHud.fmtTime(m.time),
+        "Rings " + m.ringsHit + " / 8 &nbsp;·&nbsp; Crates on target " + m.cratesHit + " / 3",
+        "Landings " + m.landings.length + " (best quality " +
+          (m.landings.length ? Math.max.apply(null, m.landings.map(function (l) { return l.quality; })) : 0) + ")",
+      ];
+      showEnd("MISSION COMPLETE", m.def.name + " — flown clean in the golden hour.", lines, m.score);
+      audio.good();
+    }
+
+    function endCrashed(reason) {
+      showEnd("CRASHED — " + reason.toUpperCase(),
+        "The Kestrel-9 is done for this sortie. Press R to fly again.",
+        ["Score kept: " + game.mission.score, "Damage 100% — airframe lost"], game.mission.score);
+      audio.bad();
+    }
+
+    // ---- crates ---------------------------------------------------------------
+    function clearCrates() {
+      for (var i = 0; i < crates.length; i++) scene.remove(crates[i].mesh);
+      crates.length = 0;
+    }
+    function syncCrates(m) {
+      while (crates.length < m.crates.length) {
+        var g = new THREE.Group();
+        var box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.3, 1.3),
+          new THREE.MeshStandardMaterial({ color: 0xb98a4a, roughness: 0.9 }));
+        box.castShadow = true;
+        g.add(box);
+        var chute = new THREE.Mesh(new THREE.ConeGeometry(1.5, 1.1, 10, 1, true),
+          new THREE.MeshStandardMaterial({ color: 0xf2ede2, roughness: 0.8, side: THREE.DoubleSide }));
+        chute.position.y = 1.7;
+        g.add(chute);
+        scene.add(g);
+        crates.push({ mesh: g });
+      }
+      for (var i = 0; i < m.crates.length; i++) {
+        crates[i].mesh.position.set(m.crates[i].x, m.crates[i].y, m.crates[i].z);
+      }
+      while (crates.length > m.crates.length) scene.remove(crates.pop().mesh);
+    }
+
+    // ---- input ---------------------------------------------------------------
+    window.addEventListener("keydown", function (e) {
+      if (e.repeat) return;
+      keys[e.code] = true;
+      audio.ensure();
+      if (game.state === "menu") {
+        if (e.code === "Digit1") startMission("gate");
+        else if (e.code === "Digit2") startMission("hop");
+        else if (e.code === "Digit3") startMission("drop");
+        else if (e.code === "Digit4") startMission("free");
+        else if (e.code === "Enter") startMission(selMission);
+        return;
+      }
+      if (e.code === "KeyP" || e.code === "Escape") {
+        if (game.state === "flying") {
+          game.state = "paused";
+          $("pause").classList.remove("hidden");
+        } else if (game.state === "paused") {
+          game.state = "flying";
+          $("pause").classList.add("hidden");
+        }
+        return;
+      }
+      if (e.code === "KeyR" && (game.state === "flying" || game.state === "complete" || game.state === "crashed")) {
+        startMission(game.mission.id);
+        return;
+      }
+      if (game.state !== "flying") return;
+      if (e.code === "KeyG") input.gearToggle = true;
+      if (e.code === "KeyF") input.flapToggle = true;
+      if (e.code === "KeyC") {
+        game.camMode = game.camMode === "chase" ? "cockpit" : "chase";
+        game.lookYaw = 0; game.lookPitch = 0;
+        $("cockpit-frame").classList.toggle("hidden", game.camMode !== "cockpit");
+      }
+      if (e.code === "KeyM") audio.toggleMute();
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (game.mission && Missions.dropCrate(C, game.mission, s)) audio.click();
+      }
+    });
+    window.addEventListener("keyup", function (e) { keys[e.code] = false; });
+    $("btn-resume").addEventListener("click", function () {
+      game.state = "flying"; $("pause").classList.add("hidden");
+    });
+    $("btn-quit").addEventListener("click", quitToMenu);
+    $("btn-again").addEventListener("click", function () { startMission(game.mission.id); });
+    $("btn-menu").addEventListener("click", quitToMenu);
+
+    // mouse: click canvas for pointer lock (look + steer assist)
+    canvas.addEventListener("click", function () {
+      if (game.state !== "flying") return;
+      audio.ensure();
+      if (!game.pointerLocked && canvas.requestPointerLock) canvas.requestPointerLock();
+    });
+    document.addEventListener("pointerlockchange", function () {
+      game.pointerLocked = document.pointerLockElement === canvas;
+      if (!game.pointerLocked) { game.lookYaw = 0; game.lookPitch = 0; }
+    });
+    document.addEventListener("mousemove", function (e) {
+      if (!game.pointerLocked || game.state !== "flying") return;
+      game.lookYaw = clamp(game.lookYaw - e.movementX * 0.0022, -1.1, 1.1);
+      game.lookPitch = clamp(game.lookPitch - e.movementY * 0.0016, -0.45, 0.5);
+    });
+
+    function readKeys() {
+      input.throttleDelta = 0;
+      if (keys.KeyW) input.throttleDelta = 0.55;
+      if (keys.KeyS) input.throttleDelta = -0.55;
+      input.pitch = (keys.ArrowUp ? -1 : 0) + (keys.ArrowDown ? 1 : 0);
+      input.roll = (keys.ArrowRight ? 1 : 0) + (keys.ArrowLeft ? -1 : 0);
+      input.yaw = (keys.KeyD ? 1 : 0) + (keys.KeyA ? -1 : 0);
+      input.brake = !!keys.KeyB;
+      // mouse steer assist while pointer-locked: look yaw nudges the roll
+      if (game.pointerLocked) input.roll += clamp(game.lookYaw * 0.55, -0.6, 0.6);
+      input.roll = clamp(input.roll, -1, 1);
+    }
+
+    // ---- autopilot (staging only): fly toward the current target ---------------
+    function autopilotInput(dt) {
+      var m = game.mission;
+      var tgt = m ? Missions.currentTarget(C, m) : null;
+      input.throttleSet = 0.82;
+      input.gearToggle = false; input.flapToggle = false;
+      if (!tgt) { input.pitch = 0; input.roll = 0; input.yaw = 0; return; }
+      var dx = tgt.x - s.x, dz = tgt.z - s.z, dy = tgt.y - s.y;
+      var wantHdg = Math.atan2(dx, -dz);
+      var err = ((wantHdg - s.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      var wantRoll = clamp(err * 1.1, -0.6, 0.6);
+      input.roll = clamp((wantRoll - s.roll) * 2.2, -1, 1);
+      var wantPitch = clamp(dy * 0.012, -0.25, 0.3);
+      input.pitch = clamp((s.pitch - wantPitch) * 3, -1, 1);
+      input.yaw = clamp(err * 0.4, -0.5, 0.5);
+      // slow down + gear down when the target is a landing strip
+      // (any staging / mission); otherwise clean the gear up after takeoff
+      var dist = Math.hypot(dx, dz);
+      if (tgt.kind === "land") {
+        input.throttleSet = dist < 260 ? 0.25 : 0.6;
+        if (dist < 200 && !s.gearDown) input.gearToggle = true;
+      } else if (s.airborne && s.speed > 35 && s.gearDown) {
+        input.gearToggle = true; // clean up after takeoff
+      }
+    }
+
+    // ---- staging ---------------------------------------------------------------
+    function applyStaging() {
+      var q = new URLSearchParams(window.location.search);
+      var staging = q.get("staging");
+      var missionId = q.get("mission") || "gate";
+      if (q.get("cam") === "cockpit") game.camMode = "cockpit";
+      if (!staging) return;
+      game.staging = staging;
+      startMission(missionId);
+      var f = C.AIRFIELDS.halcyon;
+      if (staging === "cover") {
+        // ring 3 -> 4 leg, heading 310 deg: straight into the low sun.
+        // Plane 150 m out from ring 4, chase cam behind it.
+        game.mission.ringsHit = 3;
+        game.mission.nextRing = 3;
+        resetPlane({ x: -735, y: 113, z: 296, heading: -0.87 });
+        s.onGround = false; s.airborne = true;
+        s.vx = -32.1; s.vy = -0.7; s.vz = -27;
+        s.throttle = 0.85;
+        game.autopilot = true;
+        game.camMode = "chase";
+        // snap the chase camera in behind the plane at once
+        camPos.set(-725, 116.5, 304);
+        camLook.set(-746, 113, 287);
+      } else if (staging === "cockpit") {
+        resetPlane({ x: 60, y: 105, z: -330, heading: Math.PI / 2 });
+        s.onGround = false; s.airborne = true;
+        s.vx = 45; s.vy = 0; s.vz = 0;
+        s.throttle = 0.8;
+        game.autopilot = true;
+        game.camMode = "cockpit";
+        $("cockpit-frame").classList.remove("hidden");
+      } else if (staging === "landing") {
+        // final approach from the east, westbound onto runway 27
+        game.mission.ringsHit = 8;
+        game.mission.nextRing = 8;
+        resetPlane({ x: f.x + 380, y: f.elev + 38, z: f.z + 12, heading: -Math.PI / 2 });
+        s.onGround = false; s.airborne = true;
+        s.vx = -34; s.vy = -1.5; s.vz = 0;
+        s.throttle = 0.35;
+        s.gearDown = true; s.flaps = 2;
+        game.autopilot = true;
+        game.camMode = "chase";
+      } else if (staging === "complete") {
+        game.mission.ringsHit = 8;
+        game.mission.nextRing = 8;
+        resetPlane({ x: f.x + 320, y: f.elev + 40, z: f.z, heading: -Math.PI / 2 });
+        s.onGround = false; s.airborne = true;
+        s.vx = -32; s.vy = -1.2; s.vz = 0;
+        s.throttle = 0.3;
+        s.gearDown = true; s.flaps = 2;
+        game.autopilot = true;
+        game.camMode = "chase";
+      }
+      planeObj.group.position.set(s.x, s.y, s.z);
+    }
+
+    // ---- cameras ---------------------------------------------------------------
+    var tmpV = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpU = new THREE.Vector3();
+    function updateCamera(dt) {
+      var e = new THREE.Euler(s.pitch, -s.heading, -s.roll, "YXZ");
+      var quat = new THREE.Quaternion().setFromEuler(e);
+      planeObj.group.quaternion.copy(quat);
+      planeObj.group.position.set(s.x, s.y, s.z);
+      tmpF.set(Math.sin(s.heading) * Math.cos(s.pitch), Math.sin(s.pitch), -Math.cos(s.heading) * Math.cos(s.pitch));
+      tmpU.set(0, 1, 0);
+      if (game.camMode === "cockpit") {
+        tmpV.set(0, 1.25, -1.35).applyQuaternion(quat).add(planeObj.group.position);
+        camera.position.copy(tmpV);
+        tmpV.copy(tmpF).multiplyScalar(30).add(camera.position);
+        camera.lookAt(tmpV);
+        camera.fov = lerp(camera.fov, 66, dt * 4);
+      } else {
+        // chase: behind and above, roll damped, look offset for mouse look
+        var back = 11 + s.speed * 0.04, up = 3.2 + s.speed * 0.008;
+        var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
+        tmpV.set(0, up, back).applyQuaternion(q2).add(planeObj.group.position);
+        var k = 1 - Math.exp(-dt * 8);
+        camPos.lerp(tmpV, k);
+        camera.position.copy(camPos);
+        tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 14);
+        tmpV.y += 1.2;
+        // mouse look: swing the look target sideways/up
+        var right = new THREE.Vector3().crossVectors(tmpF, tmpU).normalize();
+        tmpV.addScaledVector(right, game.lookYaw * 26);
+        tmpV.y += game.lookPitch * 14;
+        var k2 = 1 - Math.exp(-dt * 7);
+        camLook.lerp(tmpV, k2);
+        camera.lookAt(camLook);
+        var wantFov = 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
+        camera.fov = lerp(camera.fov, wantFov, dt * 3);
+      }
+      camera.updateProjectionMatrix();
+    }
+
+    // ---- main loop ---------------------------------------------------------------
+    var last = performance.now();
+    var acc = 0;
+    var sprayTimer = 0;
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      // Wall-clock frame time (unclamped): physics catches up in fixed
+      // 120 Hz substeps so the game stays real-time even at low fps.
+      // Visual interpolation uses a clamped step so the camera never jumps.
+      var rawDt = (now - last) / 1000 || 0.016;
+      if (rawDt > 1) rawDt = 1;
+      last = now;
+      var visDt = Math.min(rawDt, 0.06);
+      game.time += rawDt;
+      SkylaneWorld.update(world, visDt, game.time, quality);
+      if (game.state === "flying" && s) {
+        // fixed-step physics (120 Hz substeps) with catch-up: on a slow
+        // machine the game stays real-time (choppy) instead of slow-motion
+        acc += rawDt;
+        if (acc > 0.5) acc = 0.5; // never spiral: drop time beyond half a second
+        var step = 1 / 120, n = 0;
+        while (acc >= step && n < 60) {
+          if (game.autopilot) autopilotInput(step); else readKeys();
+          var evts = Phys.update(C, s, step, input, 0);
+          input.gearToggle = false; input.flapToggle = false;
+          handleEvents(evts);
+          if (game.mission && !game.mission.done) {
+            Missions.update(C, game.mission, step, s, evts);
+            consumeMissionEvents();
+          }
+          if (game.mission && game.mission.done && game.state === "flying") endMissionComplete();
+          acc -= step; n++;
+          if (s.crashed) break;
+        }
+        if (n >= 60) acc = 0;
+        syncCrates(game.mission);
+        // spray when skimming the sea
+        sprayTimer -= visDt;
+        var overSea = Phys.terrainHeight(s.x, s.z, C) < 0.5;
+        if (overSea && s.agl < 7 && s.speed > 32 && sprayTimer <= 0) {
+          sprayTimer = 0.09;
+          world.particles.burst(s.x, 0.8, s.z, 6, [0.85, 0.95, 1.0], 7, 0.9);
+        }
+        // speed overlay
+        $("speedfx").style.opacity = s.speed > 55 ? String(clamp((s.speed - 55) / 45, 0, 0.85)) : "0";
+        // audio + stall beep
+        audio.setFlight(s.throttle, s.speed, !s.onGround);
+        if (s.stallWarn && game.time - lastStallBeep > 0.9) { lastStallBeep = game.time; audio.stall(); }
+        // plane visuals
+        SkylanePlane.updatePlane(planeObj, visDt, game.time, s, s.speed, s.throttle);
+        // wingtip trail anchors (world space)
+        var q = planeObj.group.quaternion;
+        var lw = new THREE.Vector3(-3.9, 0.05, -0.35).applyQuaternion(q).add(planeObj.group.position);
+        var rw = new THREE.Vector3(3.9, 0.05, -0.35).applyQuaternion(q).add(planeObj.group.position);
+        SkylanePlane.pushTrail(planeObj.trailL, lw.x, lw.y, lw.z);
+        SkylanePlane.pushTrail(planeObj.trailR, rw.x, rw.y, rw.z);
+        updateCamera(visDt);
+        var tgt = game.mission ? Missions.currentTarget(C, game.mission) : null;
+        hud.update(s, game.mission, tgt, visDt);
+      } else if (game.state === "menu") {
+        // slow cinematic orbit over the isles behind the menu
+        var t = game.time * 0.045;
+        camera.position.set(Math.sin(t) * 900, 260 + Math.sin(t * 0.7) * 40, Math.cos(t) * 900);
+        camera.lookAt(-100, 40, -100);
+        camera.fov = 58;
+        camera.updateProjectionMatrix();
+        planeObj.group.position.set(-380, 26, -260);
+        planeObj.group.rotation.set(0, Math.PI / 2, 0);
+      }
+      renderer.render(scene, camera);
+    }
+
+    function handleEvents(evts) {
+      for (var i = 0; i < evts.length; i++) {
+        var e = evts[i];
+        if (e.type === "touchdown") {
+          audio.thud(clamp(e.vspeed / 9, 0.1, 1));
+          world.particles.burst(s.x, s.y + 0.5, s.z, 22, [0.8, 0.72, 0.55], 6, 0.5);
+        } else if (e.type === "gear-up-landing") {
+          audio.thud(1);
+          world.particles.burst(s.x, s.y + 0.5, s.z, 30, [1.0, 0.6, 0.2], 8, 0.5);
+        } else if (e.type === "crash") {
+          world.particles.burst(s.x, s.y + 1, s.z, 90, [1.0, 0.55, 0.15], 16, 0.7);
+          endCrashed(e.reason);
+        } else if (e.type === "takeoff") {
+          audio.good();
+        }
+      }
+    }
+
+    function consumeMissionEvents() {
+      var m = game.mission;
+      while (m.events.length) {
+        var e = m.events.shift();
+        if (e.type === "ring") {
+          var r = world.rings[e.n - 1];
+          if (r) {
+            r.passed = true;
+            r.glow.material.opacity = 0.12;
+            r.torus.material.emissiveIntensity = 0.7; // dimmed but still gold
+            world.particles.burst(r.group.position.x, r.group.position.y, r.group.position.z, 60, [1.0, 0.8, 0.25], 12, 0.4);
+          }
+          audio.ring();
+        } else if (e.type === "crate-hit") {
+          audio.good();
+        } else if (e.type === "mission-failed") {
+          // crash already handled via physics events
+        }
+      }
+    }
+
+    // expose live state for testing / screenshots
+    global.__skylane = {
+      game: game,
+      renderer: renderer,
+      scene: scene,
+      world: world,
+      quality: quality,
+      get state() { return s; },
+      get mission() { return game.mission; },
+      startMission: startMission,
+      quitToMenu: quitToMenu,
+      version: "skylane-3d-1",
+    };
+
+    applyStaging();
+    if (!game.mission && game.state === "menu") {
+      resetPlane();
+    }
+    requestAnimationFrame(frame);
+    return game;
+  }
+
+  // boot
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", makeGame);
+  } else {
+    makeGame();
+  }
+})(typeof window !== "undefined" ? window : globalThis);

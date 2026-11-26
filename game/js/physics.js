@@ -1,0 +1,257 @@
+// physics.js — flight model for the Kestrel-9. Pure math, no THREE,
+// so Node can require it for logic tests. State is a plain object;
+// update(dt, input, groundHeight) advances it and returns events.
+//
+// Conventions: x east, z south, y up. heading 0 = north (-z), grows
+// clockwise. pitch + = nose up, roll + = right wing down.
+// input: { throttle: -1..1 delta or null, pitch: -1..1, roll: -1..1,
+//          yaw: -1..1, gearToggle, flapToggle, brake } — throttle is a
+//          target 0..1 set by keys, pitch/roll/yaw are deflections.
+(function (global) {
+  "use strict";
+
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // Deterministic value noise for terrain. Shared with world.js through
+  // the same constants; physics only needs ground height at (x, z).
+  function hash2(ix, iz, seed) {
+    var n = (ix * 374761393 + iz * 668265263 + seed * 974634211) | 0;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return (((n ^ (n >>> 16)) >>> 0) / 4294967295) * 2 - 1;
+  }
+  function smooth(t) { return t * t * (3 - 2 * t); }
+  function vnoise(x, z, seed) {
+    var ix = Math.floor(x), iz = Math.floor(z);
+    var fx = x - ix, fz = z - iz;
+    var a = hash2(ix, iz, seed), b = hash2(ix + 1, iz, seed);
+    var c = hash2(ix, iz + 1, seed), d = hash2(ix + 1, iz + 1, seed);
+    var u = smooth(fx), v = smooth(fz);
+    return lerp(lerp(a, b, u), lerp(c, d, u), v);
+  }
+
+  // Terrain height. Must match world.js exactly (same formula).
+  function terrainHeight(x, z, C) {
+    var h = -6; // seabed
+    for (var i = 0; i < C.ISLANDS.length; i++) {
+      var isl = C.ISLANDS[i];
+      var dx = (x - isl.cx) / isl.r, dz = (z - isl.cz) / isl.r;
+      var d2 = dx * dx + dz * dz;
+      if (d2 < 1.6) {
+        var fall = Math.max(0, 1 - d2);
+        var bump = Math.pow(fall, 1.6) * isl.h;
+        var n = vnoise(x * 0.012 + isl.seed, z * 0.012, isl.seed) * 0.5 + 0.5;
+        var ridge = vnoise(x * 0.045, z * 0.045, isl.seed + 7) * 0.5 + 0.5;
+        bump *= 0.72 + 0.28 * n + 0.22 * ridge * fall;
+        h = Math.max(h, bump - 2 + n * 3);
+      }
+    }
+    // Flatten ground near runways so the strip is landable: fully flat
+    // across the strip itself, fading out over a 70 m apron.
+    for (var k in C.AIRFIELDS) {
+      var f = C.AIRFIELDS[k];
+      var hd = f.headingDeg * Math.PI / 180;
+      var lx = Math.sin(hd), lz = -Math.cos(hd); // runway axis (heading 0 = north = -z)
+      var rx = x - f.x, rz = z - f.z;
+      var along = rx * lx + rz * lz;
+      var across = -rx * lz + rz * lx;
+      var aL = Math.abs(along), aW = Math.abs(across);
+      var tL = aL <= f.length / 2 ? 1 : smooth(clamp(1 - (aL - f.length / 2) / 70, 0, 1));
+      var tW = aW <= f.width / 2 ? 1 : smooth(clamp(1 - (aW - f.width / 2) / 70, 0, 1));
+      h = lerp(h, f.elev, tL * tW);
+    }
+    return h;
+  }
+
+  function makeState(C, start) {
+    return {
+      x: start.x, y: start.y, z: start.z,
+      vx: 0, vy: 0, vz: 0,
+      heading: start.heading, pitch: 0, roll: 0,
+      speed: 0, throttle: 0, gearDown: true, flaps: 0,
+      fuel: 1, damage: 0, onGround: true, airborne: false,
+      stallWarn: false, crashed: false, crashReason: "",
+      verticalSpeed: 0, agl: 0,
+    };
+  }
+
+  // One physics step. events: array of {type, ...} pushed by the step.
+  function update(C, s, dt, input, groundH) {
+    var events = [];
+    var P = C.PLANE;
+    if (s.crashed) return events;
+
+    // --- controls ---------------------------------------------------------
+    if (input.throttleDelta) s.throttle = clamp(s.throttle + input.throttleDelta * dt, 0, 1);
+    if (input.throttleSet !== undefined && input.throttleSet !== null) s.throttle = clamp(input.throttleSet, 0, 1);
+    if (input.gearToggle) { s.gearDown = !s.gearDown; events.push({ type: s.gearDown ? "gear-down" : "gear-up" }); }
+    if (input.flapToggle) { s.flaps = (s.flaps + 1) % 3; events.push({ type: "flaps", flaps: s.flaps }); }
+
+    var stallSpeed = P.stallSpeed * (1 - P.flapLift * (s.flaps / 2));
+    var speed = Math.sqrt(s.vx * s.vx + s.vy * s.vy + s.vz * s.vz);
+    s.speed = speed;
+
+    // --- fuel ---------------------------------------------------------------
+    var burn = (P.fuelBurnIdle + (1 - P.fuelBurnIdle) * s.throttle) / P.fuelSeconds;
+    s.fuel = Math.max(0, s.fuel - burn * dt);
+    if (s.fuel <= 0 && s.throttle > 0) { s.throttle = 0; events.push({ type: "fuel-empty" }); }
+
+    var speedFactor = clamp(speed / 40, 0.25, 1); // control authority
+    var flying = !s.onGround && speed > stallSpeed * 0.55;
+
+    if (s.onGround) {
+      // --- ground roll ------------------------------------------------------
+      var groundNow = terrainHeight(s.x, s.z, C);
+      var hd = s.heading;
+      var fx = Math.sin(hd), fz = -Math.cos(hd);
+      var fwdSpeed = s.vx * fx + s.vz * fz;
+      var thrust = (s.fuel > 0 ? s.throttle * P.maxThrustAccel : 0);
+      var drag = P.dragK * fwdSpeed * Math.abs(fwdSpeed) * (s.gearDown ? 1 + P.gearDrag : 1);
+      var brake = input.brake ? 6 : 0;
+      var accel = thrust - drag - brake - (fwdSpeed > 0.5 ? 0.35 : 0); // rolling friction
+      fwdSpeed = Math.max(0, fwdSpeed + accel * dt);
+      // gentle steering on the ground
+      s.heading += (input.yaw || 0) * P.yawRate * 1.6 * dt * clamp(fwdSpeed / 12, 0, 1);
+      var nfx = Math.sin(s.heading), nfz = -Math.cos(s.heading);
+      s.vx = nfx * fwdSpeed; s.vz = nfz * fwdSpeed; s.vy = 0;
+      s.y = groundNow;
+      s.pitch = 0; s.roll *= Math.max(0, 1 - 6 * dt);
+      if (fwdSpeed > P.takeoffSpeed && (input.pitch || 0) < -0.25) {
+        s.onGround = false; s.airborne = true; s.pitch = 0.12;
+        s.y = groundNow + 0.4; // small hop so the contact check cannot re-trigger
+        events.push({ type: "takeoff", speed: fwdSpeed });
+      }
+    } else {
+      // --- flight -----------------------------------------------------------
+      var authority = flying ? speedFactor : speedFactor * 0.45;
+      s.roll += (input.roll || 0) * P.rollRate * authority * dt;
+      s.roll = clamp(s.roll, -1.35, 1.35);
+      // roll stability: wings level themselves slowly without input
+      if (!(input.roll)) s.roll *= Math.max(0, 1 - 0.25 * dt);
+      s.pitch += -(input.pitch || 0) * P.pitchRate * authority * dt;
+      s.pitch = clamp(s.pitch, -0.6, 0.6);
+      // coordinated turn: bank turns the nose (bank right -> turn right)
+      s.heading += Math.sin(s.roll) * (C.GRAVITY / Math.max(speed, 12)) * 0.55 * dt;
+      s.heading += (input.yaw || 0) * P.yawRate * authority * 0.5 * dt;
+
+      // nose direction
+      var cp = Math.cos(s.pitch), sp = Math.sin(s.pitch);
+      var ch = Math.cos(s.heading), sh = Math.sin(s.heading);
+      // forward vector from heading/pitch/roll (roll rotates lift, not nose)
+      var nx = sh * cp, ny = sp, nz = -ch * cp;
+
+      var thrustAcc = (s.fuel > 0 ? s.throttle * P.maxThrustAccel : 0);
+      // drag grows with speed and with gear/flaps
+      var dragMult = 1 + (s.gearDown ? P.gearDrag : 0) + (s.flaps > 0 ? P.flapDrag * (s.flaps / 2) : 0);
+      var dragAcc = P.dragK * dragMult * speed * speed;
+
+      // velocity steers toward the nose when the wing flies; below stall
+      // the plane mushes and sinks.
+      var align = flying ? clamp(1.6 * dt, 0, 1) : clamp(0.35 * dt, 0, 1);
+      s.vx = lerp(s.vx, nx * speed, align);
+      s.vy = lerp(s.vy, ny * speed, align);
+      s.vz = lerp(s.vz, nz * speed, align);
+
+      // apply thrust along nose, drag opposite velocity, gravity down
+      var inv = speed > 0.01 ? 1 / speed : 0;
+      s.vx += (nx * thrustAcc - s.vx * inv * dragAcc) * dt;
+      s.vy += (ny * thrustAcc - s.vy * inv * dragAcc - C.GRAVITY * (flying ? 0.12 : 0.85)) * dt;
+      s.vz += (nz * thrustAcc - s.vz * inv * dragAcc) * dt;
+
+      // stall: heavy sink + nose drop + warning
+      var stalled = speed < stallSpeed;
+      s.stallWarn = stalled;
+      if (stalled) {
+        s.vy -= C.GRAVITY * 0.55 * dt;
+        s.pitch = lerp(s.pitch, -0.18, clamp(1.5 * dt, 0, 1));
+        if (!s._stallNoted) { events.push({ type: "stall" }); s._stallNoted = true; }
+      } else s._stallNoted = false;
+
+      s.x += s.vx * dt; s.y += s.vy * dt; s.z += s.vz * dt;
+      s.verticalSpeed = s.vy;
+    }
+
+    // --- ground / water contact ----------------------------------------------
+    var g = terrainHeight(s.x, s.z, C);
+    s.agl = s.y - g;
+    if (s.y <= g + 0.02 && !s.onGround && s.vy <= 0.5) {
+      // touchdown (or crash into terrain/water); climbing away never counts
+      var vs = -s.vy;
+      var overWater = g < 0.5;
+      var nearField = nearestField(C, s.x, s.z);
+      if (overWater) {
+        s.crashed = true; s.crashReason = "ditched in the sea";
+        events.push({ type: "crash", reason: s.crashReason });
+      } else if (vs > P.crashVSpeed || (Math.abs(s.roll) > 0.55 && vs > 3)) {
+        s.crashed = true; s.crashReason = "hard impact";
+        events.push({ type: "crash", reason: s.crashReason, vspeed: vs });
+      } else {
+        var gearOk = s.gearDown;
+        var quality = landingQuality(C, s, nearField, vs);
+        if (!gearOk) {
+          s.damage = Math.min(C.MAX_DAMAGE, s.damage + P.damagePerHardHit);
+          events.push({ type: "gear-up-landing", quality: Math.round(quality * 0.3), vspeed: vs });
+        } else {
+          events.push({ type: "touchdown", quality: quality, vspeed: vs, field: nearField ? nearField.code : null });
+        }
+        if (vs > P.hardVSpeed) {
+          s.damage = Math.min(C.MAX_DAMAGE, s.damage + P.damagePerHardHit * 0.5);
+          events.push({ type: "hard-landing", vspeed: vs });
+        }
+        if (s.damage >= C.MAX_DAMAGE) {
+          s.crashed = true; s.crashReason = "airframe gave out";
+          events.push({ type: "crash", reason: s.crashReason });
+        }
+        s.onGround = true; s.airborne = false;
+        s.y = g; s.vy = 0;
+        s.pitch = 0; s.roll *= 0.4;
+        // keep rolling speed along heading
+        var fsp = Math.sqrt(s.vx * s.vx + s.vz * s.vz);
+        var fhx = Math.sin(s.heading), fhz = -Math.cos(s.heading);
+        s.vx = fhx * fsp; s.vz = fhz * fsp;
+      }
+    }
+    if (s.onGround && s.y < g) s.y = g;
+    return events;
+  }
+
+  function nearestField(C, x, z) {
+    var best = null, bestD = 1e9;
+    for (var k in C.AIRFIELDS) {
+      var f = C.AIRFIELDS[k];
+      var d = Math.hypot(x - f.x, z - f.z);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    return bestD < 900 ? best : null;
+  }
+
+  // Landing quality 0..200. Runway, centreline, alignment, sink rate, gear.
+  function landingQuality(C, s, field, vs) {
+    var q = 200;
+    q -= clamp(vs, 0, 9) * 16;                    // sink rate
+    q -= Math.abs(s.roll) * 90;                   // wings level
+    if (field) {
+      var hd = field.headingDeg * Math.PI / 180;
+      var want = field.headingDeg; // degrees, 0 = north
+      var dh = Math.abs(((s.heading * 180 / Math.PI - want + 540) % 360) - 180);
+      dh = Math.min(dh, 180 - dh);
+      q -= dh * 1.1;                              // alignment
+      var lx = Math.sin(hd), lz = -Math.cos(hd);
+      var across = Math.abs(-(s.x - field.x) * lz + (s.z - field.z) * lx);
+      q -= across * 2.2;                          // centreline
+      var along = Math.abs((s.x - field.x) * lx + (s.z - field.z) * lz);
+      if (along > field.length / 2) q -= 60;      // off the strip
+      else q += 10;
+    } else q -= 70;                               // off-airport
+    if (!s.gearDown) q *= 0.3;
+    return Math.max(0, Math.round(q));
+  }
+
+  var api = {
+    clamp: clamp, lerp: lerp, terrainHeight: terrainHeight,
+    makeState: makeState, update: update,
+    landingQuality: landingQuality, nearestField: nearestField,
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  global.SkylanePhysics = api;
+})(typeof window !== "undefined" ? window : globalThis);

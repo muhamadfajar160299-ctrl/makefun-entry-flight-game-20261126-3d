@@ -1,0 +1,107 @@
+/* Skylane Archipelago — HUD and menu styling. Dark glass panels over a
+   golden-hour sky; big numerals that stay readable at 1280x720. */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1622;
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; color: #fff; }
+#scene-wrap, #scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hidden { display: none !important; }
+
+#vignette { position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(10, 16, 28, .42) 100%); }
+#speedfx { position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 62%, rgba(255, 255, 255, .14) 100%);
+  transition: opacity .3s; }
+
+#hud { position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .65); }
+.hud-label { font-size: 12px; letter-spacing: .18em; color: #cfe3f5; opacity: .9; }
+.hud-big { font-size: 44px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.hud-unit { font-size: 16px; font-weight: 600; color: #cfe3f5; }
+.hud-sub { font-size: 13px; color: #dfeaf4; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+#hud-speed { position: absolute; top: 18px; left: 22px; }
+#thr-bar { width: 150px; height: 8px; background: rgba(8, 20, 34, .55); border: 1px solid rgba(255,255,255,.35);
+  border-radius: 4px; margin-top: 6px; overflow: hidden; }
+#thr-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffd76a, #ff9d45); }
+
+#hud-compass { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); text-align: center; width: 420px; }
+#tape { position: relative; height: 34px; overflow: hidden; background: rgba(8, 20, 34, .55);
+  border: 1px solid rgba(255,255,255,.3); border-radius: 8px; }
+#tape-inner { position: absolute; top: 0; height: 100%; white-space: nowrap; font-size: 13px; }
+#tape-inner span { display: inline-block; width: 60px; text-align: center; line-height: 34px; color: #dfeaf4; }
+#tape-inner span.card { color: #ffd76a; font-weight: 700; }
+#tape-needle { color: #ffd76a; font-size: 13px; line-height: 1; margin-top: -2px; }
+#hud-hdg { font-size: 21px; font-weight: 800; margin-top: 1px; font-variant-numeric: tabular-nums; }
+#hud-target { font-size: 15px; font-weight: 700; color: #ffd76a; margin-top: 2px; }
+
+#hud-alt { position: absolute; top: 18px; right: 22px; text-align: right; }
+
+#hud-mission { position: absolute; top: 118px; left: 22px; background: rgba(8, 20, 34, .55);
+  border: 1px solid rgba(255,255,255,.28); border-radius: 10px; padding: 10px 14px; max-width: 330px; }
+#hud-mission-name { color: #ffd76a; font-weight: 800; font-size: 15px; margin-bottom: 5px; }
+.hud-obj { font-size: 14px; line-height: 1.55; color: #eef4fa; }
+.hud-dot { color: #ffd76a; }
+.hud-obj.done { opacity: .55; text-decoration: line-through; }
+
+#hud-lower-left { position: absolute; left: 22px; bottom: 20px; width: 300px; }
+.hud-meter { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.hud-meter-label { width: 34px; letter-spacing: .12em; color: #cfe3f5; }
+.hud-meter-bar { flex: 1; height: 10px; background: rgba(8, 20, 34, .55); border: 1px solid rgba(255,255,255,.3); border-radius: 5px; overflow: hidden; }
+#fuel-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #7be495, #3ecf6e); }
+#dmg-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffb066, #ff5340); }
+#fuel-pct { width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+#hud-gear { width: 92px; color: #7be495; font-weight: 700; letter-spacing: .06em; }
+#hud-score-line { font-size: 17px; font-weight: 800; margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+#hud-att { position: absolute; right: 22px; bottom: 20px; text-align: center; }
+#att-canvas { width: 108px; height: 108px; border-radius: 50%; border: 2px solid rgba(255,255,255,.55);
+  background: rgba(8, 20, 34, .45); box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+.att-label { margin-top: 2px; }
+
+#hud-message { position: absolute; left: 50%; bottom: 118px; transform: translateX(-50%);
+  max-width: 760px; text-align: center; background: rgba(8, 20, 34, .68); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; padding: 9px 22px; font-size: 15px; font-weight: 600; }
+#hud-stall { position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+  color: #ff5d47; font-size: 22px; font-weight: 800; letter-spacing: .04em;
+  background: rgba(20, 4, 0, .55); padding: 8px 18px; border-radius: 8px; animation: blink 0.7s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+#hud-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font-size: 20px; color: rgba(255,255,255,.75); }
+
+#cockpit-frame { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+#cockpit-frame::before { content: ""; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 42%, transparent 52%, rgba(8, 14, 22, .62) 82%, rgba(5, 9, 15, .88) 100%); }
+#cockpit-dash { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: 100%;
+  height: 108px; display: flex; justify-content: center; align-items: flex-start; gap: 14px; padding-top: 16px;
+  background: linear-gradient(rgba(10, 16, 24, 0), #0b1119 42%, #060a10); }
+.cockpit-gauge { text-align: center; min-width: 86px; background: rgba(20, 30, 44, .9);
+  border: 1px solid rgba(255,255,255,.22); border-radius: 8px; padding: 6px 8px; }
+.cg-label { display: block; font-size: 10px; letter-spacing: .2em; color: #9fc3e2; }
+.cg-val { font-size: 22px; font-weight: 800; color: #ffe9b0; font-variant-numeric: tabular-nums; }
+
+.overlay { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(rgba(6, 12, 22, .45), rgba(6, 12, 22, .72)); }
+.panel { background: rgba(8, 18, 32, .82); border: 1px solid rgba(255, 215, 106, .35); border-radius: 16px;
+  padding: 30px 38px; max-width: 660px; width: min(92vw, 660px); text-align: center;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .55); backdrop-filter: blur(4px); }
+.panel.small { max-width: 480px; }
+.menu-eyebrow { color: #ffd76a; letter-spacing: .3em; font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+h1 { font-size: 52px; line-height: .95; letter-spacing: .02em; font-weight: 900; }
+h2 { font-size: 34px; font-weight: 900; letter-spacing: .02em; }
+.menu-sub { color: #cfe3f5; margin: 10px 0 18px; font-size: 15px; }
+#mission-list { text-align: left; margin: 6px 0 14px; }
+.mission-row { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16); border-radius: 10px;
+  color: #fff; padding: 11px 14px; margin-bottom: 8px; cursor: pointer; font-family: inherit; }
+.mission-row:hover, .mission-row.sel { border-color: #ffd76a; background: rgba(255, 215, 106, .14); }
+.mission-row .m-num { color: #ffd76a; font-weight: 900; font-size: 19px; }
+.mission-row .m-name { font-weight: 800; font-size: 16px; }
+.mission-row .m-brief { color: #cfe3f5; font-size: 13px; line-height: 1.4; }
+.menu-controls { font-size: 13px; color: #dfeaf4; line-height: 1.7; margin-bottom: 8px; }
+.menu-controls b { color: #ffd76a; }
+.menu-note { font-size: 12px; color: #9fb6ca; }
+button { pointer-events: auto; cursor: pointer; font-family: inherit; font-weight: 800; letter-spacing: .08em;
+  background: #ffd76a; color: #201400; border: 0; border-radius: 10px; padding: 12px 22px; font-size: 15px; margin: 6px 4px 0; }
+button:hover { background: #ffe08a; }
+#end-score { font-size: 30px; font-weight: 900; color: #ffd76a; margin: 8px 0; font-variant-numeric: tabular-nums; }
+#end-lines { text-align: left; font-size: 14px; line-height: 1.7; color: #dfeaf4; margin: 4px auto 10px; max-width: 380px; }
