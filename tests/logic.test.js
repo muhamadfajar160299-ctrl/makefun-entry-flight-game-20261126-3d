@@ -173,6 +173,25 @@ check("airborne after takeoff", tk.s.airborne === true);
   check("fast flight earns bigger time bonus", fast > slow && fast > 200, "fast=" + fast + " slow=" + slow);
 })();
 
+// ---- staging presets stay consistent (score matches rings) -------------------
+// A staged mid-mission state must never show rings banked with a zero
+// score: presetProgress pays each ring out at once.
+(function () {
+  const m = Missions.makeMission(C, "gate");
+  Missions.start(C, m);
+  Missions.presetProgress(C, m, 3, 95);
+  check("preset 3 rings banks 300 pts", m.ringsHit === 3 && m.score === 300 && m.nextRing === 3, "rings=" + m.ringsHit + " score=" + m.score);
+  check("preset mission time reads 1:35", m.time === 95, "time=" + m.time);
+  const s = Phys.makeState(C, { x: -850, y: 110, z: 200, heading: 0 });
+  s.onGround = false; s.airborne = true;
+  Missions.update(C, m, 0.1, s, []);
+  check("ring 4 after preset scores 400 total", m.ringsHit === 4 && m.score === 400, "rings=" + m.ringsHit + " score=" + m.score);
+  const m2 = Missions.makeMission(C, "gate");
+  Missions.start(C, m2);
+  Missions.presetProgress(C, m2, 8, 185);
+  check("preset 8 rings banks 800 pts", m2.ringsHit === 8 && m2.score === 800 && m2.nextRing === 8, "score=" + m2.score);
+})();
+
 // ---- crash on ditching -------------------------------------------------------------------------
 (function () {
   const s = Phys.makeState(C, { x: 1200, y: 3, z: -100, heading: 0 });

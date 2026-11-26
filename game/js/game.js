@@ -295,6 +295,17 @@
     }
 
     // ---- staging ---------------------------------------------------------------
+    // Dim rings already banked by a staging preset, so the world agrees
+    // with the mission panel (a staged 8/8 must not show 8 glowing rings).
+    function markRingsPassed(n) {
+      for (var i = 0; i < n && i < world.rings.length; i++) {
+        var r = world.rings[i];
+        r.passed = true;
+        r.glow.material.opacity = 0.12;
+        r.torus.material.emissiveIntensity = 0.7;
+      }
+    }
+
     function applyStaging() {
       var q = new URLSearchParams(window.location.search);
       var staging = q.get("staging");
@@ -307,8 +318,12 @@
       if (staging === "cover") {
         // ring 3 -> 4 leg, heading 310 deg: straight into the low sun.
         // Plane 150 m out from ring 4, chase cam behind it.
-        game.mission.ringsHit = 3;
-        game.mission.nextRing = 3;
+        // Staged mid-mission state must read consistently: 3 rings
+        // already banked (300 pts) after ~1:35 of flying; ring 4 pays
+        // out the instant it is threaded, so the frozen shot reads
+        // 4/8, SCORE 400, ~1:40 — never 0.
+        Missions.presetProgress(C, game.mission, 3, 95);
+        markRingsPassed(3);
         resetPlane({ x: -735, y: 113, z: 296, heading: -0.87 });
         s.onGround = false; s.airborne = true;
         s.vx = -32.1; s.vy = -0.7; s.vz = -27;
@@ -319,17 +334,28 @@
         camPos.set(-725, 116.5, 304);
         camLook.set(-746, 113, 287);
       } else if (staging === "cockpit") {
-        resetPlane({ x: 60, y: 105, z: -330, heading: Math.PI / 2 });
+        // Level cruise over open water east of ring 1, at the ring's own
+        // altitude, heading straight at it: no dive, no bank, and only
+        // sea in the near foreground. The old pose dived -1500 FPM
+        // toward the ring and banked over the shoreline, which dragged
+        // the beach shelf and the cowling into the frame.
+        resetPlane({ x: 560, y: 72, z: 180, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
-        s.vx = 45; s.vy = 0; s.vz = 0;
+        s.vx = -45; s.vy = 0; s.vz = 0;
         s.throttle = 0.8;
         game.autopilot = true;
         game.camMode = "cockpit";
         $("cockpit-frame").classList.remove("hidden");
+        game.mission.message = "Ring 1 ahead — thread it, then keep the rally going.";
+        game.mission.messageT = 4;
       } else if (staging === "landing") {
-        // final approach from the east, westbound onto runway 27
-        game.mission.ringsHit = 8;
-        game.mission.nextRing = 8;
+        // final approach from the east, westbound onto runway 27.
+        // All 8 rings banked on the way here (800 pts) after ~3:05 of
+        // flying — the shot must read as the end of a real rally, not a
+        // teleport with a zero score.
+        Missions.presetProgress(C, game.mission, 8, 185);
+        markRingsPassed(8);
+        game.mission.messageT = 0;
         resetPlane({ x: f.x + 380, y: f.elev + 38, z: f.z + 12, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -34; s.vy = -1.5; s.vz = 0;
@@ -338,8 +364,13 @@
         game.autopilot = true;
         game.camMode = "chase";
       } else if (staging === "complete") {
-        game.mission.ringsHit = 8;
-        game.mission.nextRing = 8;
+        // same honest preset as landing: 8 rings banked (800 pts),
+        // ~3:10 on the clock; the autopilot landing then adds the time
+        // bonus + landing quality on top, so the end card reads like a
+        // real 8-ring rally instead of 7 seconds of flying.
+        Missions.presetProgress(C, game.mission, 8, 190);
+        markRingsPassed(8);
+        game.mission.messageT = 0;
         resetPlane({ x: f.x + 320, y: f.elev + 40, z: f.z, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -32; s.vy = -1.2; s.vz = 0;
@@ -379,8 +410,12 @@
         // (a tight chase loses the ring the moment the plane passes it).
         var tight = game.staging === "cover";
         var back = tight ? 26 : 11 + s.speed * 0.04, up = tight ? 5 : 3.2 + s.speed * 0.008;
+        // cover: sit slightly to the sun side so the plane reads in
+        // three-quarter view instead of dead-astern (a tail-on plane
+        // inside a giant ring looks like a speck)
+        var side = tight ? 8 : 0;
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
-        tmpV.set(0, up, back).applyQuaternion(q2).add(planeObj.group.position);
+        tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
         camPos.lerp(tmpV, k);
         camera.position.copy(camPos);
@@ -423,6 +458,16 @@
       var visDt = Math.min(rawDt, 0.06);
       game.time += rawDt;
       SkylaneWorld.update(world, visDt, game.time, quality);
+      // in-world labels fade out up close so the plane never flies
+      // through a giant wall of text; they read from the air, not from
+      // on top of the sign
+      if (world.labels) {
+        for (var li = 0; li < world.labels.length; li++) {
+          var lb = world.labels[li];
+          var ld = lb.position.distanceTo(camera.position);
+          lb.material.opacity = clamp((ld - 80) / 150, 0, 0.9);
+        }
+      }
       if (game.state === "flying" && s) {
         // fixed-step physics (120 Hz substeps) with catch-up: on a slow
         // machine the game stays real-time (choppy) instead of slow-motion
@@ -443,20 +488,15 @@
           if (s.crashed) break;
         }
         if (n >= 60) acc = 0;
-        // Cover staging: freeze the instant the plane is ~50 m out from
-        // ring 4 (ringsHit still 3) so a screenshot can frame plane +
-        // ring + sun with zero timing jitter. At ~0.3 fps the capture
-        // script cannot time this from outside — the plane crosses 100 m
-        // between two polls. The freeze pauses physics only (the scene
-        // keeps rendering); the capture unfreezes by setting state back
-        // to "flying". No pause panel appears (state is set directly).
-        if (game.staging === "cover" && !game.coverPreFrozen && game.mission && game.mission.ringsHit === 3) {
-          var r4 = C.RINGS[3];
-          var fdx = s.x - r4.x, fdy = s.y - r4.y, fdz = s.z - r4.z;
-          if (fdx * fdx + fdy * fdy + fdz * fdz < 60 * 60) {
-            game.coverPreFrozen = true;
-            game.state = "paused";
-          }
+        // Cover staging: freeze the instant the plane threads ring 4
+        // (ringsHit 4, SCORE 400, "Ring 4 of 8 — +100 pts" toast up) so
+        // the shot shows real progress with the ring still framing the
+        // plane. The plane is inside the ring at that moment and the
+        // chase camera sits 26 m behind it, so the ring still frames
+        // the shot instead of being left behind.
+        if (game.staging === "cover" && !game.coverPreFrozen && game.mission && game.mission.ringsHit === 4) {
+          game.coverPreFrozen = true;
+          game.state = "paused";
         }
         syncCrates(game.mission);
         // spray when skimming the sea
@@ -473,6 +513,12 @@
         if (s.stallWarn && game.time - lastStallBeep > 0.9) { lastStallBeep = game.time; audio.stall(); }
         // plane visuals
         SkylanePlane.updatePlane(planeObj, visDt, game.time, s, s.speed, s.throttle);
+        // cockpit view: the solid prop blades read as black bars across
+        // the sky this close to the camera (frozen mid-spin at low fps),
+        // so hide them and keep only the faint blur disc
+        var inCockpit = game.camMode === "cockpit";
+        for (var bi = 0; bi < planeObj.blades.length; bi++) planeObj.blades[bi].visible = !inCockpit;
+        if (inCockpit) planeObj.disc.material.opacity = Math.min(planeObj.disc.material.opacity, 0.12);
         // wingtip trail anchors (world space)
         var q = planeObj.group.quaternion;
         var lw = new THREE.Vector3(-3.9, 0.05, -0.35).applyQuaternion(q).add(planeObj.group.position);

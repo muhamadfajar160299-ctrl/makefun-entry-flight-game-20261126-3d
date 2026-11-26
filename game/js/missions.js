@@ -25,8 +25,22 @@
 
   function start(C, m) {
     m.started = true; m.time = 0; m.score = 0;
-    m.message = m.def.brief; m.messageT = 7;
+    // one-line toast, not the full brief: the objective headline under
+    // the compass now carries the goal, so the bottom banner stays short
+    m.message = m.def.name + " — " + m.def.short; m.messageT = 5;
     m.events.push({ type: "mission-start", id: m.id });
+    return m;
+  }
+
+  // Stage a mission mid-flight with score and clock that match the
+  // progress shown (used by screenshot staging): rings already banked
+  // pay out immediately, so a staged 3/8 always reads SCORE 300 and a
+  // staged 8/8 always reads SCORE 800 — never 0.
+  function presetProgress(C, m, ringsHit, time) {
+    m.ringsHit = ringsHit;
+    m.nextRing = Math.min(ringsHit, C.RINGS.length);
+    m.score = ringsHit * C.SCORE.ring;
+    m.time = time;
     return m;
   }
 
@@ -172,6 +186,7 @@
     makeMission: makeMission, start: start, update: update,
     currentTarget: currentTarget, dropCrate: dropCrate,
     progressText: progressText, timeBonus: timeBonus,
+    presetProgress: presetProgress,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   global.SkylaneMissions = api;

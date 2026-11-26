@@ -14,6 +14,31 @@
     n = Math.round(n) % 360; if (n < 0) n += 360;
     return (n < 10 ? "00" : n < 100 ? "0" : "") + n;
   }
+  function fmtDist(m) {
+    return m >= 1000 ? (m / 1000).toFixed(1) + " KM" : Math.round(m) + " M";
+  }
+  // One short objective line for the headline under the compass, in the
+  // style the neighbouring entries use ("Thread the rings — 8 to go").
+  // Never a paragraph: the mission panel on the left keeps the detail.
+  function objectiveLine(C, m, target, s) {
+    if (!m) return "";
+    var dist = target ? Math.hypot(target.x - s.x, target.z - s.z) : 0;
+    if (m.id === "gate") {
+      if (m.nextRing < C.RINGS.length)
+        return "THREAD THE RINGS — " + (C.RINGS.length - m.ringsHit) + " TO GO";
+      return "LAND AT HALCYON FIELD — " + fmtDist(dist);
+    }
+    if (m.id === "hop") {
+      var where = m.hopsDone === 0 ? "NORTH CAY STRIP" : "HALCYON FIELD";
+      return "LAND AT " + where + " — " + fmtDist(dist);
+    }
+    if (m.id === "drop") {
+      if (m.cratesDropped < 3)
+        return "DROP CRATE " + (m.cratesDropped + 1) + " OF 3 — HARBOR TARGET";
+      return "LAND AT HALCYON FIELD — " + fmtDist(dist);
+    }
+    return "FREE FLIGHT — ENJOY THE GOLDEN HOUR";
+  }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
   function buildTape() {
@@ -96,6 +121,9 @@
         $("hud-target-label").textContent = "FREE FLIGHT";
         $("hud-target-dist").textContent = "";
       }
+      // objective headline under the compass
+      var objEl = $("hud-objective");
+      if (objEl && mission) objEl.textContent = objectiveLine(C2, mission, target, s);
       // mission panel
       if (mission) {
         $("hud-mission-name").textContent = mission.def.num + ". " + mission.def.name;

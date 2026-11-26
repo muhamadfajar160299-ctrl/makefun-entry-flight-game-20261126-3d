@@ -112,11 +112,13 @@
     hub.rotation.x = -Math.PI / 2;
     prop.add(hub);
     var bladeMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.35, metalness: 0.5 });
+    var blades = [];
     for (var b = 0; b < 2; b++) {
       var blade = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.5, 0.06), bladeMat);
       blade.rotation.z = b * Math.PI;
       blade.position.y = 0;
       prop.add(blade);
+      blades.push(blade);
     }
     var disc = new THREE.Mesh(new THREE.CircleGeometry(1.3, 24),
       new THREE.MeshBasicMaterial({ color: 0xcccccc, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
@@ -168,7 +170,7 @@
     var trailR = makeTrail(0xffffff);
 
     return {
-      group: group, prop: prop, disc: disc, gear: gear,
+      group: group, prop: prop, disc: disc, gear: gear, blades: blades,
       navL: navL, navR: navR, strobe: strobe,
       trailL: trailL, trailR: trailR,
     };

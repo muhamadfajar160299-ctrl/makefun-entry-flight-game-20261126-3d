@@ -91,9 +91,9 @@
         " vec3 col = mix(hor, mid, smoothstep(0.0, 0.22, h));" +
         " col = mix(col, zen, smoothstep(0.18, 0.75, h));" +
         " float s = max(dot(normalize(vDir), sunDir), 0.0);" +
-        " col += vec3(1.0, 0.66, 0.30) * pow(s, 900.0) * 2.4;" +
-        " col += vec3(1.0, 0.58, 0.22) * pow(s, 42.0) * 0.42;" +
-        " col += vec3(1.0, 0.55, 0.20) * pow(s, 7.0) * 0.30;" +
+        " col += vec3(1.0, 0.66, 0.30) * pow(s, 1500.0) * 3.0;" +
+        " col += vec3(1.0, 0.58, 0.22) * pow(s, 60.0) * 0.18;" +
+        " col += vec3(1.0, 0.55, 0.20) * pow(s, 10.0) * 0.15;" +
         " col = mix(col, vec3(0.36, 0.32, 0.30), smoothstep(-0.02, -0.08, vDir.y));" +
         " gl_FragColor = vec4(col, 1.0); }",
     });
@@ -173,6 +173,22 @@
     return [c[0] * v, c[1] * v, c[2] * v];
   }
 
+  // Patchwork fields near Halcyon Field: big flat colour blocks (wheat /
+  // meadow / pasture / dry grass) so the farmland reads from the air,
+  // the way neighbouring entries do it. Colour only — the terrain shape
+  // is untouched. Returns null outside the farmland belt.
+  function fieldBlockColor(C, x, z, h) {
+    var f = C.AIRFIELDS.halcyon;
+    var d = Math.hypot(x - f.x, z - f.z);
+    if (d > 750 || h < 3.5 || h > 70) return null;
+    var bx = Math.floor(x / 120), bz = Math.floor(z / 120);
+    var hh = Math.abs(Math.sin(bx * 12.9898 + bz * 78.233) * 43758.5453) % 1;
+    if (hh < 0.20) return [0.80, 0.64, 0.30]; // wheat — the tan accent
+    if (hh < 0.50) return [0.42, 0.60, 0.28]; // meadow green
+    if (hh < 0.75) return [0.22, 0.42, 0.18]; // dark pasture
+    return [0.52, 0.66, 0.32]; // light green
+  }
+
   function buildTerrain(scene, C, phys, quality) {
     var size = C.WORLD_SIZE, seg = quality === "low" ? 130 : 200;
     var geo = new THREE.PlaneGeometry(size, size, seg, seg);
@@ -190,6 +206,11 @@
       var slope = Math.sqrt(hx * hx + hz * hz) / 12;
       var patch = phys.vnoise(x * 0.01, z * 0.01, 5) * 0.5 + 0.5;
       var col = terrainColor(h, slope, rnd(), patch);
+      var field = fieldBlockColor(C, x, z, h);
+      if (field) {
+        var fv = 0.92 + rnd() * 0.16 + (patch - 0.5) * 0.1;
+        col = [field[0] * fv, field[1] * fv, field[2] * fv];
+      }
       colors[i * 3] = col[0]; colors[i * 3 + 1] = col[1]; colors[i * 3 + 2] = col[2];
     }
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
@@ -357,6 +378,24 @@
         new THREE.MeshStandardMaterial({ color: 0x274b63, roughness: 0.25, metalness: 0.4 }));
       cab.position.set(tower.position.x, f.elev + 15.4, tower.position.z);
       group.add(cab);
+      // control-tower read: red band, lit cab windows, antenna + beacon,
+      // so the tower reads as a tower and never as a blank monolith
+      var band = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.6, 1.6, 8),
+        new THREE.MeshStandardMaterial({ color: 0xc23a2e, roughness: 0.8 }));
+      band.position.set(tower.position.x, f.elev + 12.6, tower.position.z);
+      group.add(band);
+      var cabGlass = new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.4, 7.2),
+        new THREE.MeshStandardMaterial({ color: 0xffd9a3, emissive: 0xffb84d, emissiveIntensity: 0.9, roughness: 0.2 }));
+      cabGlass.position.set(tower.position.x, f.elev + 15.8, tower.position.z);
+      group.add(cabGlass);
+      var mast = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 5, 5),
+        new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5, metalness: 0.6 }));
+      mast.position.set(tower.position.x, f.elev + 19.4, tower.position.z);
+      group.add(mast);
+      var beacon = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0xff2a1a, emissive: 0xff2a1a, emissiveIntensity: 2.5 }));
+      beacon.position.set(tower.position.x, f.elev + 22, tower.position.z);
+      group.add(beacon);
     }
     scene.add(group);
     return { group: group, sock: sock };
@@ -555,6 +594,51 @@
     };
   }
 
+  // ---- in-world labels ---------------------------------------------------
+  // Text sprites for the places that matter: both airfields and the
+  // charted isles. They always face the camera and fade out up close
+  // (game.js fades them by distance), so they read from the air without
+  // ever covering the plane.
+  function makeLabelSprite(text) {
+    var cv = document.createElement("canvas");
+    cv.width = 512; cv.height = 96;
+    var g = cv.getContext("2d");
+    g.clearRect(0, 0, 512, 96);
+    g.font = "bold 52px Arial";
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.lineWidth = 10; g.strokeStyle = "rgba(8, 20, 34, 0.85)";
+    g.strokeText(text, 256, 48);
+    g.fillStyle = "rgba(255, 244, 220, 0.95)";
+    g.fillText(text, 256, 48);
+    var tex = new THREE.CanvasTexture(cv);
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.9, depthWrite: false }));
+    sp.scale.set(46, 8.6, 1);
+    return sp;
+  }
+
+  function buildLabels(scene, C, phys) {
+    var labels = [];
+    function add(text, x, y, z) {
+      var sp = makeLabelSprite(text);
+      sp.position.set(x, y, z);
+      scene.add(sp);
+      labels.push(sp);
+    }
+    var hal = C.AIRFIELDS.halcyon, ncy = C.AIRFIELDS.northCay;
+    add("HALCYON FIELD", hal.x, hal.elev + 42, hal.z);
+    add("NORTH CAY STRIP", ncy.x, ncy.elev + 36, ncy.z);
+    var isles = [
+      ["GULL ROCK", 620, -720],
+      ["LITTLE HALCYON", -980, 620],
+      ["TURTLE ISLET", 180, 980],
+    ];
+    for (var i = 0; i < isles.length; i++) {
+      var is = isles[i];
+      add(is[0], is[1], phys.terrainHeight(is[1], is[2], C) + 48, is[2]);
+    }
+    return labels;
+  }
+
   // ---- build all ------------------------------------------------------------------
   function build(scene, C, phys, quality) {
     quality = quality || "high";
@@ -569,9 +653,10 @@
     var clouds = buildClouds(scene);
     var lamp = buildLighthouse(scene, C, phys);
     var particles = makeParticles(scene);
+    var labels = buildLabels(scene, C, phys);
     return {
       sky: sky, ocean: ocean, rings: rings, clouds: clouds,
-      harbor: harbor, lamp: lamp, particles: particles,
+      harbor: harbor, lamp: lamp, particles: particles, labels: labels,
       windsocks: [hal.sock, ncy.sock], treeCount: treeCount,
     };
   }
