@@ -14,14 +14,19 @@
   C.FOG_NEAR = 900;
   C.FOG_FAR = 4200;
   C.SUN_ELEVATION = 0.24;       // low golden-hour sun (~14 deg)
-  C.SUN_AZIMUTH = -2.6;         // sun low in the west-northwest: ~20 deg
-                                // off the ring 3->4 leg, so the plane is
-                                // lit from the side instead of backlit
+  C.SUN_AZIMUTH = -2.0;         // sun low in the west, ~28 deg north of
+                                // due west: the disc itself sits inside
+                                // the frame of a westbound approach, so
+                                // the golden-hour sun reads as a disc
+                                // instead of a glow off-frame, while the
+                                // plane stays lit from the front quarter
   C.SUN_COLOR = 0xffd9a3;
-  C.SUN_INTENSITY = 1.35;
+  C.SUN_INTENSITY = 1.5;        // stronger key light: deeper modelling
+                                // on the airframe and the buildings
   C.HEMI_SKY = 0x9fc4e8;
   C.HEMI_GROUND = 0x8a6b4a;
-  C.HEMI_INTENSITY = 0.75;
+  C.HEMI_INTENSITY = 0.65;      // a dimmer sky fill lets the sun-side
+                                // shadows read, so shapes stop looking flat
 
   // Islands: [cx, cz, radius, height, seed]. Height falls off smoothly.
   C.ISLANDS = [
@@ -71,6 +76,70 @@
     truck: { dxMin: -155, dxMax: 40, dz: 110, speed: 3, nose: "x+" },
     cart: { dxMin: -68, dxMax: -18, dz: 102, speed: 1.5, nose: "x+" },
   };
+
+  // Where the live traffic stands when a screenshot staging opens:
+  // the vehicles are the same moving traffic (same lanes, same
+  // stepper), only their start pose is chosen per shot so each one
+  // is inside the camera's frame at the moment of the capture. dx
+  // is metres east of the field centre; dir is the travel direction.
+  // The capture runs on a software rasterizer that advances the
+  // traffic on the clamped visual step, so the vehicles barely move
+  // between staging and the shot — stage them where they must be
+  // seen, not where they would drift to in real time.
+  C.TRAFFIC_STAGING = {
+    // cover: the taxiing Kestrel holds mid-taxiway, ~65 m ahead of
+    // the frozen chase camera, left of the runway — a readable
+    // silhouette, not a speck; the truck and cart work the apron
+    // in the same frame
+    cover: {
+      taxi: { dx: 80, dir: -1 },
+      truck: { dx: 30, dir: -1 },
+      cart: { dx: -18, dir: -1 },
+    },
+    // landing: the taxiing Kestrel is at the east end of the
+    // taxiway, beside the threshold the camera is aimed at
+    landing: {
+      taxi: { dx: 200, dir: -1 },
+      truck: { dx: 0, dir: 1 },
+      cart: { dx: -20, dir: 1 },
+    },
+    // complete: the taxiing Kestrel is alongside the rollout, the
+    // truck and cart on the apron to the left of the landed plane
+    complete: {
+      taxi: { dx: -20, dir: -1 },
+      truck: { dx: -20, dir: 1 },
+      cart: { dx: -50, dir: 1 },
+    },
+    // cockpit: the airport is behind the camera; keep the standard
+    // opening picture
+    cockpit: {
+      taxi: { dx: 40, dir: -1 },
+      truck: { dx: -155, dir: 1 },
+      cart: { dx: -68, dir: 1 },
+    },
+  };
+
+  // Touchdown dust: a small, short-lived puff of tan dust that
+  // settles fast, never a white cloud over the nose. Count, speed
+  // and life are all cut back from the old burst, and the colour
+  // is dirt, not smoke.
+  C.DUST = { count: 12, speed: 3.2, up: 0.25, life: 0.45, color: [0.62, 0.55, 0.42] };
+
+  // In-world label heights above field elevation. Halcyon sits low
+  // enough that the label clears the top of the frame in the
+  // low chase of the complete shot instead of clipping there.
+  C.LABEL_DY = { halcyon: 30, northCay: 36 };
+
+  // No-cloud box around the ring-1 approach leg (the cockpit shot's
+  // sightline): a cloud sprite inside it is lifted to the high deck
+  // so no white puff ever sits on the nose in the cockpit frame.
+  // x/y/z in world metres.
+  C.CLOUD_KEEPOUT = { x0: 100, x1: 620, y0: 40, y1: 380, z0: 130, z1: 230 };
+  // v6: no tall trees on the ring-1 leg — the ridge trees used to poke
+  // across the nose line in the cockpit shot; low scrub stays. Round 4
+  // widens the box west to the far ridge and south past the crest,
+  // because the two bars that survived round 3 sit on that line
+  C.TREE_CORRIDOR = { x0: -150, x1: 580, z0: 90, z1: 280 };
 
   // Graded apron pad south of Halcyon runway: taxiway, apron,
   // terminal and hangar all sit on ground flattened to field

@@ -154,6 +154,41 @@
     return tr;
   }
 
+  // True when a point sits inside the no-cloud box around the ring-1
+  // approach leg (the cockpit shot's sightline). Pure and tested.
+  function inKeepout(C, x, y, z) {
+    var k = C.CLOUD_KEEPOUT;
+    if (!k) return false;
+    return x >= k.x0 && x <= k.x1 && y >= k.y0 && y <= k.y1 && z >= k.z0 && z <= k.z1;
+  }
+
+  // True when a ground point sits in the no-tall-tree corridor along
+  // the ring-1 leg (the cockpit shot's sightline). Pure and tested.
+  function inTreeCorridor(C, x, z) {
+    var k = C.TREE_CORRIDOR;
+    if (!k) return false;
+    return x >= k.x0 && x <= k.x1 && z >= k.z0 && z <= k.z1;
+  }
+
+  // Start pose for one live traffic vehicle under a screenshot
+  // staging: the vehicle's lane comes from C.TRAFFIC, its staged
+  // offset and direction from C.TRAFFIC_STAGING. Returns null when
+  // the staging (or the vehicle) has no staged pose, so the caller
+  // falls back to the standard opening picture.
+  function stagingTrafficPose(C, staging, key) {
+    var table = C.TRAFFIC_STAGING && C.TRAFFIC_STAGING[staging];
+    if (!table || !table[key]) return null;
+    var lane = C.TRAFFIC[key];
+    if (!lane) return null;
+    var f = C.AIRFIELDS.halcyon;
+    var dx = table[key].dx;
+    // clamp into the lane so a staged pose can never start a vehicle
+    // outside the road it drives on
+    var lo = Math.min(lane.dxMin, lane.dxMax), hi = Math.max(lane.dxMin, lane.dxMax);
+    dx = clamp(dx, lo, hi);
+    return { x: f.x + dx, dir: table[key].dir || 1 };
+  }
+
   function makeState(C, start) {
     return {
       x: start.x, y: start.y, z: start.z,
@@ -362,6 +397,8 @@
     clamp: clamp, lerp: lerp, terrainHeight: terrainHeight, vnoise: vnoise,
     makeState: makeState, update: update, windAt: windAt,
     trafficStep: trafficStep, makeTraffic: makeTraffic,
+    stagingTrafficPose: stagingTrafficPose, inKeepout: inKeepout,
+    inTreeCorridor: inTreeCorridor,
     landingQuality: landingQuality, nearestField: nearestField,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

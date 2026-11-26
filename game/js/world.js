@@ -85,15 +85,20 @@
         "gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
       fragmentShader: "varying vec3 vDir; uniform vec3 sunDir; uniform float uNight;" +
         "void main(){ float h = clamp(vDir.y, -0.08, 1.0);" +
-        " vec3 zen = vec3(0.22, 0.42, 0.68);" +
+        " vec3 zen = vec3(0.16, 0.38, 0.66);" +
         " vec3 mid = vec3(0.55, 0.68, 0.84);" +
-        " vec3 hor = vec3(1.00, 0.72, 0.42);" +
+        " vec3 hor = vec3(1.00, 0.68, 0.38);" +
         " vec3 col = mix(hor, mid, smoothstep(0.0, 0.22, h));" +
         " col = mix(col, zen, smoothstep(0.18, 0.75, h));" +
         " float s = max(dot(normalize(vDir), sunDir), 0.0);" +
-        " col += vec3(1.0, 0.66, 0.30) * pow(s, 1500.0) * 3.0;" +
-        " col += vec3(1.0, 0.58, 0.22) * pow(s, 60.0) * 0.18;" +
-        " col += vec3(1.0, 0.55, 0.20) * pow(s, 10.0) * 0.15;" +
+        // the sun is a hard little disc now, not a soft blob: a
+        // tighter core and a much weaker corona and glow, so the
+        // halo ring that used to outline the sun is gone and the
+        // disc stays a small golden coin instead of a blown-out
+        // white patch
+        " col += vec3(1.0, 0.72, 0.34) * pow(s, 1200.0) * 2.6;" +
+        " col += vec3(1.0, 0.58, 0.22) * pow(s, 60.0) * 0.02;" +
+        " col += vec3(1.0, 0.55, 0.20) * pow(s, 10.0) * 0.02;" +
         " col = mix(col, vec3(0.36, 0.32, 0.30), smoothstep(-0.02, -0.08, vDir.y));" +
         // night: the golden hour drains out of the sky and a deep blue
         // takes over; the sun disc fades to a faint moon-glow so the
@@ -130,8 +135,8 @@
     bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
     bump.repeat.set(56, 56);
     var mat = new THREE.MeshPhongMaterial({
-      color: 0x0d4258, specular: 0xffbe78, shininess: 220,
-      bumpMap: bump, bumpScale: 0.9,
+      color: 0x0b3d52, specular: 0xffc06a, shininess: 280,
+      bumpMap: bump, bumpScale: 1.3,
     });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = 0;
@@ -170,13 +175,18 @@
     var c;
     if (h < -1) c = deep;
     else if (h < 1.2) c = shallow;
-    else if (h < 3.5) c = sand;
+    // the pale sand shelf is narrow now: above it the shore blends
+    // into grass instead of a wide beige apron around every beach
+    else if (h < 2.2) c = sand;
+    else if (h < 3.5) c = [lerp(sand[0], grass[0], (h - 2.2) / 1.3), lerp(sand[1], grass[1], (h - 2.2) / 1.3), lerp(sand[2], grass[2], (h - 2.2) / 1.3)];
     else if (h < 26) c = patch > 0.5 ? meadow : grass;
     else if (h < 70) c = patch > 0.62 ? forest : grass;
     else if (h < 118) c = forest;
-    else c = rock;
+    // rock is two tones keyed to the patch noise, so the ridges read
+    // as broken strata instead of one flat grey slab
+    else c = patch > 0.55 ? [0.52, 0.46, 0.40] : [0.40, 0.36, 0.33];
     if (slope > 0.55 && h > 3.5) c = rock;
-    var v = 0.92 + n * 0.16 + (patch - 0.5) * 0.1;
+    var v = h >= 118 ? 0.88 + n * 0.24 + (patch - 0.5) * 0.12 : 0.92 + n * 0.16 + (patch - 0.5) * 0.1;
     return [c[0] * v, c[1] * v, c[2] * v];
   }
 
@@ -191,9 +201,9 @@
     var bx = Math.floor(x / 120), bz = Math.floor(z / 120);
     var hh = Math.abs(Math.sin(bx * 12.9898 + bz * 78.233) * 43758.5453) % 1;
     if (hh < 0.20) return [0.88, 0.68, 0.26]; // wheat — the tan accent
-    if (hh < 0.50) return [0.36, 0.58, 0.24]; // meadow green
-    if (hh < 0.75) return [0.14, 0.34, 0.12]; // dark pasture
-    return [0.58, 0.72, 0.32]; // light green
+    if (hh < 0.50) return [0.32, 0.60, 0.22]; // meadow green
+    if (hh < 0.75) return [0.12, 0.36, 0.12]; // dark pasture
+    return [0.52, 0.74, 0.30]; // light green
   }
 
   function buildTerrain(scene, C, phys, quality) {
@@ -222,9 +232,12 @@
     }
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
-    var detail = noiseBumpTexture(31, 9000, "#ededed");
+    // a harder grain: more, darker speckles at a finer repeat, so the
+    // ground reads as textured earth from the air instead of a smooth
+    // wash — the detail is in the texture, not in extra geometry
+    var detail = noiseBumpTexture(31, 14000, "#e2e2e2");
     detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
-    detail.repeat.set(170, 170);
+    detail.repeat.set(220, 220);
     var mat = new THREE.MeshStandardMaterial({ map: detail, vertexColors: true, roughness: 0.95, metalness: 0 });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
@@ -252,6 +265,7 @@
       var h = phys.terrainHeight(x, z, C);
       if (h < 9 || h > 112) return -1;
       if (inClearZone(x, z)) return -1;
+      if (phys.inTreeCorridor && phys.inTreeCorridor(C, x, z)) return -1;
       return h;
     }
     var spots = []; // [x, h, z, scale, broadleaf?]
@@ -282,9 +296,11 @@
     var trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 2.6, 5);
     var trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4128, roughness: 1 });
     var pineGeo = new THREE.ConeGeometry(2.3, 6.5, 6);
-    var pineMat = new THREE.MeshStandardMaterial({ color: 0x1e4d24, roughness: 1 });
+    // foliage is lighter now: the old near-black pine read as a dark
+    // blob from the air, not as a tree
+    var pineMat = new THREE.MeshStandardMaterial({ color: 0x2a5c2e, roughness: 1 });
     var broadGeo = new THREE.SphereGeometry(2.6, 8, 6);
-    var broadMat = new THREE.MeshStandardMaterial({ color: 0x2f6b2a, roughness: 1 });
+    var broadMat = new THREE.MeshStandardMaterial({ color: 0x3d7a33, roughness: 1 });
     var pines = spots.filter(function (sp) { return !sp[4]; });
     var broads = spots.filter(function (sp) { return sp[4]; });
     var trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
@@ -311,7 +327,37 @@
     }
     trunks.castShadow = true; pineMesh.castShadow = true; broadMesh.castShadow = true;
     scene.add(trunks); scene.add(pineMesh); scene.add(broadMesh);
-    return spots.length;
+    // low scrub: squashed bushes on the open ground the trees leave
+    // bare, including a loose ring of them around the airfield so the
+    // foreground of the landing and cover shots has something in it
+    // besides flat grass. One instanced mesh, so the cost is trivial.
+    var bushGeo = new THREE.SphereGeometry(1.5, 7, 5);
+    var bushMat = new THREE.MeshStandardMaterial({ color: 0x4a7d2e, roughness: 1 });
+    var bushSpots = [];
+    var bt = 0;
+    while (bushSpots.length < 320 && bt < 6000) {
+      bt++;
+      var bx, bz;
+      if (bushSpots.length < 90) {
+        // near-airfield ring: 120–260 m out from Halcyon Field
+        var ang = rnd() * Math.PI * 2, rad = 120 + rnd() * 140;
+        bx = C.AIRFIELDS.halcyon.x + Math.cos(ang) * rad;
+        bz = C.AIRFIELDS.halcyon.z + Math.sin(ang) * rad;
+      } else {
+        bx = (rnd() - 0.5) * C.WORLD_SIZE; bz = (rnd() - 0.5) * C.WORLD_SIZE;
+      }
+      var bh = phys.terrainHeight(bx, bz, C);
+      if (bh < 3.5 || bh > 60 || inClearZone(bx, bz)) continue;
+      bushSpots.push([bx, bh, bz, 0.8 + rnd() * 1.4]);
+    }
+    var bushMesh = new THREE.InstancedMesh(bushGeo, bushMat, Math.max(bushSpots.length, 1));
+    for (var bi = 0; bi < bushSpots.length; bi++) {
+      var bs = bushSpots[bi];
+      place(bushMesh, bi, bs[0], bs[1] + 0.7 * bs[3], bs[2], bs[3], bs[3] * 0.55);
+    }
+    bushMesh.castShadow = true;
+    scene.add(bushMesh);
+    return { trees: spots.length, bushes: bushSpots.length };
   }
 
   // ---- airfields ------------------------------------------------------------------
@@ -449,6 +495,15 @@
     var prop = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.3, 0.06), darkMat);
     prop.position.set(0, 0.95, -2.85);
     g.add(prop);
+    // wingtip nav lights: red left, green right — the parked and
+    // taxiing aircraft keep a readable silhouette at dusk instead
+    // of fading into the apron
+    [[0xff2a1a, -3.9], [0x2aff5a, 3.9]].forEach(function (nl) {
+      var dot = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6),
+        new THREE.MeshStandardMaterial({ color: nl[0], emissive: nl[0], emissiveIntensity: 2.2 }));
+      dot.position.set(nl[1], 0.95, -0.3);
+      g.add(dot);
+    });
     var legMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.4, metalness: 0.7 });
     var tyreMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.9 });
     [[-0.5, -0.4], [0.5, -0.4], [0, -1.7]].forEach(function (p) {
@@ -485,6 +540,15 @@
         dot.position.set(f.x + lx * d - lz * side * (f.width / 2 + 2), f.elev + 0.8, f.z + lz * d + lx * side * (f.width / 2 + 2));
         group.add(dot);
       }
+    }
+    // threshold lights: a row of green across the landing threshold
+    // (the east end for runway 27), so the strip's near end reads in
+    // the cover and landing frames even before the white bars do
+    var thrMat = new THREE.MeshStandardMaterial({ color: 0x2aff5a, emissive: 0x2aff5a, emissiveIntensity: 2.0 });
+    for (var th = -2; th <= 2; th++) {
+      var thrDot = new THREE.Mesh(lightGeo, thrMat);
+      thrDot.position.set(f.x + lx * (f.length / 2 - 1) - lz * th * 5, f.elev + 0.7, f.z + lz * (f.length / 2 - 1) + lx * th * 5);
+      group.add(thrDot);
     }
     // ---- Halcyon airport complex: PAPI, taxiway, apron, terminal -----
     if (f.code === "HAL") {
@@ -719,19 +783,21 @@
     // windsock: striped orange/white, streams downwind — its
     // direction is computed from C.WIND, the same wind the HUD
     // shows, so the sock and the readout can never disagree
-    var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 8, 6),
+    var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 10, 6),
       new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.6 }));
-    pole.position.set(f.x + lz * (f.width / 2 + 12), f.elev + 4, f.z - lx * (f.width / 2 + 12));
+    pole.position.set(f.x + lz * (f.width / 2 + 12), f.elev + 5, f.z - lx * (f.width / 2 + 12));
     pole.castShadow = true;
     group.add(pole);
     var windTo = ((C.WIND.fromDeg + 180) % 360) * Math.PI / 180;
     var wdx = Math.sin(windTo), wdz = -Math.cos(windTo);
-    var sock = new THREE.Mesh(new THREE.ConeGeometry(1.1, 4.6, 10, 1, true),
+    // the sock is bigger now, so it reads from the runway and the air
+    // instead of vanishing into the grass beside the strip
+    var sock = new THREE.Mesh(new THREE.ConeGeometry(1.35, 5.4, 10, 1, true),
       new THREE.MeshStandardMaterial({ map: windsockTexture(), roughness: 0.8, side: THREE.DoubleSide }));
     sock.rotation.z = -Math.PI / 2 - 0.22; // apex downwind, slight droop
     sock.userData.baseZ = sock.rotation.z; // update() sways it with the gusts
     var sockGroup = new THREE.Group();
-    sockGroup.position.set(pole.position.x + wdx * 2.3, f.elev + 7.4, pole.position.z + wdz * 2.3);
+    sockGroup.position.set(pole.position.x + wdx * 2.7, f.elev + 9.2, pole.position.z + wdz * 2.7);
     sockGroup.rotation.y = Math.atan2(-wdz, wdx);
     sockGroup.add(sock);
     group.add(sockGroup);
@@ -873,31 +939,34 @@
     for (var i = 0; i < C.RINGS.length; i++) {
       var r = C.RINGS[i];
       var g = new THREE.Group();
-      var torus = new THREE.Mesh(new THREE.TorusGeometry(r.r, 0.7, 14, 48),
+      var torus = new THREE.Mesh(new THREE.TorusGeometry(r.r, 0.9, 14, 48),
         new THREE.MeshStandardMaterial({
           color: 0xffc94d, metalness: 0.85, roughness: 0.3,
-          emissive: 0xcf8f00, emissiveIntensity: 1.5,
+          emissive: 0xcf8f00, emissiveIntensity: 1.8,
         }));
       torus.castShadow = true;
       g.add(torus);
+      // the halo is small and deep gold now: the old wide, pale glow
+      // washed to white against the bright horizon and read as a
+      // cloud puff sitting on the nose in the cockpit shot
       var glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: blob, color: 0xffc94d, transparent: true, opacity: 0.2,
+        map: blob, color: 0xe8a91c, transparent: true, opacity: 0.10,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }));
-      glow.scale.set(r.r * 1.7, r.r * 1.7, 1);
+      glow.scale.set(r.r * 1.4, r.r * 1.4, 1);
       g.add(glow);
       g.position.set(r.x, r.y, r.z);
       // face the incoming course: look at the previous point (or the start)
       var prev = i === 0 ? C.AIRFIELDS.halcyon : C.RINGS[i - 1];
       g.lookAt(prev.x, prev.y, prev.z);
       scene.add(g);
-      rings.push({ group: g, torus: torus, glow: glow, passed: false, baseOp: 0.2 });
+      rings.push({ group: g, torus: torus, glow: glow, passed: false, baseOp: 0.1 });
     }
     return rings;
   }
 
   // ---- clouds ------------------------------------------------------------------
-  function buildClouds(scene) {
+  function buildClouds(scene, C, phys) {
     var tex = cloudTexture();
     var clouds = [];
     var rnd = mulberry32(31337);
@@ -909,6 +978,13 @@
       sp.scale.set(s, s * 0.5, 1);
       var high = i % 3 === 0;
       sp.position.set((rnd() - 0.5) * 3800, high ? 380 + rnd() * 140 : 250 + rnd() * 110, (rnd() - 0.5) * 3800);
+      // never park a cloud in the cockpit shot's sightline down the
+      // ring-1 leg: lift it to the high deck instead, so the frame
+      // keeps its clean sky ahead of the nose
+      if (phys && phys.inKeepout && C && C.CLOUD_KEEPOUT &&
+        phys.inKeepout(C, sp.position.x, sp.position.y, sp.position.z)) {
+        sp.position.y = 420 + rnd() * 80;
+      }
       scene.add(sp);
       clouds.push({ sp: sp, v: 1.2 + rnd() * 2.2, high: high });
     }
@@ -958,10 +1034,13 @@
     for (var i = 0; i < MAX; i++) parts.push({ life: 0, x: 0, y: -999, z: 0, vx: 0, vy: 0, vz: 0, r: 1, g: 1, b: 1 });
     var cursor = 0;
     return {
-      burst: function (x, y, z, n, color, speed, up) {
+      burst: function (x, y, z, n, color, speed, up, lifeScale) {
         for (var k = 0; k < n; k++) {
           var p = parts[cursor]; cursor = (cursor + 1) % MAX;
-          p.life = 0.7 + Math.random() * 0.7;
+          // lifeScale lets a dust puff die fast (a touchdown puff
+          // must be gone by the time the end card is read) while
+          // ring bursts keep their full glitter
+          p.life = (0.7 + Math.random() * 0.7) * (lifeScale || 1);
           p.x = x; p.y = y; p.z = z;
           var a = Math.random() * Math.PI * 2, e = (Math.random() - 0.3) * Math.PI;
           p.vx = Math.cos(a) * Math.cos(e) * speed * (0.4 + Math.random() * 0.8);
@@ -1019,8 +1098,9 @@
       labels.push(sp);
     }
     var hal = C.AIRFIELDS.halcyon, ncy = C.AIRFIELDS.northCay;
-    add("HALCYON FIELD", hal.x, hal.elev + 42, hal.z);
-    add("NORTH CAY STRIP", ncy.x, ncy.elev + 36, ncy.z);
+    var labelDy = C.LABEL_DY || { halcyon: 42, northCay: 36 };
+    add("HALCYON FIELD", hal.x, hal.elev + labelDy.halcyon, hal.z);
+    add("NORTH CAY STRIP", ncy.x, ncy.elev + labelDy.northCay, ncy.z);
     var isles = [
       ["GULL ROCK", 620, -720],
       ["LITTLE HALCYON", -980, 620],
@@ -1039,19 +1119,20 @@
     var sky = buildSky(scene, C, quality);
     var ocean = buildOcean(scene, C, quality);
     buildTerrain(scene, C, phys, quality);
-    var treeCount = buildTrees(scene, C, phys);
+    var treeInfo = buildTrees(scene, C, phys);
+    var treeCount = treeInfo.trees + treeInfo.bushes;
     var hal = buildAirfield(scene, C, C.AIRFIELDS.halcyon, "27", "09", phys);
     var ncy = buildAirfield(scene, C, C.AIRFIELDS.northCay, "36", "18", phys);
     var harbor = buildHarbor(scene, C);
     var rings = buildRings(scene, C);
-    var clouds = buildClouds(scene);
+    var clouds = buildClouds(scene, C, phys);
     var lamp = buildLighthouse(scene, C, phys);
     var particles = makeParticles(scene);
     var labels = buildLabels(scene, C, phys);
     return {
       sky: sky, ocean: ocean, rings: rings, clouds: clouds,
       harbor: harbor, lamp: lamp, particles: particles, labels: labels,
-      windsocks: [hal.sock, ncy.sock], treeCount: treeCount,
+      windsocks: [hal.sock, ncy.sock], treeCount: treeCount, bushCount: treeInfo.bushes,
       traffic: hal.traffic, floodLights: hal.floodLights,
       scene: scene, phys: phys, C: C,
     };
@@ -1087,6 +1168,25 @@
     if (T.taxi) { T.taxi.tr = w.phys.makeTraffic(w.C, "taxi", f.x + 40, -1); T.taxi.g.position.set(T.taxi.tr.x, f.elev, T.taxi.tr.z); T.taxi.g.rotation.y = T.taxi.tr.heading; }
     if (T.truck) { T.truck.tr = w.phys.makeTraffic(w.C, "truck", f.x - 155, 1); T.truck.g.position.set(T.truck.tr.x, f.elev, T.truck.tr.z); T.truck.g.rotation.y = T.truck.tr.heading; }
     if (T.cart) { T.cart.tr = w.phys.makeTraffic(w.C, "cart", f.x - 68, 1); T.cart.g.position.set(T.cart.tr.x, f.elev, T.cart.tr.z); T.cart.g.rotation.y = T.cart.tr.heading; }
+  }
+
+  // Put the live traffic on its per-shot start poses (config
+  // TRAFFIC_STAGING): same vehicles, same lanes, same stepper —
+  // only the opening position changes, so each screenshot meets
+  // the traffic where its camera can see it.
+  function stageTraffic(w, staging) {
+    if (!w || !w.traffic || !w.phys || !w.phys.stagingTrafficPose) return;
+    var f = w.C.AIRFIELDS.halcyon;
+    var keys = ["taxi", "truck", "cart"];
+    for (var k = 0; k < keys.length; k++) {
+      var veh = w.traffic[keys[k]];
+      if (!veh) continue;
+      var pose = w.phys.stagingTrafficPose(w.C, staging, keys[k]);
+      if (!pose) continue;
+      veh.tr = w.phys.makeTraffic(w.C, keys[k], pose.x, pose.dir);
+      veh.g.position.set(veh.tr.x, f.elev, veh.tr.z);
+      veh.g.rotation.y = veh.tr.heading;
+    }
   }
 
   function update(w, dt, t, quality) {
@@ -1137,6 +1237,6 @@
     w.particles.update(dt);
   }
 
-  var api = { build: build, update: update, setNight: setNight, resetTraffic: resetTraffic };
+  var api = { build: build, update: update, setNight: setNight, resetTraffic: resetTraffic, stageTraffic: stageTraffic };
   global.SkylaneWorld = api;
 })(typeof window !== "undefined" ? window : globalThis);

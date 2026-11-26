@@ -347,6 +347,10 @@
       if (!staging) return;
       game.staging = staging;
       startMission(missionId);
+      // the live traffic opens on its per-shot poses, so each
+      // screenshot meets the taxiing plane, the truck and the cart
+      // where its camera can actually see them
+      if (SkylaneWorld.stageTraffic) SkylaneWorld.stageTraffic(world, staging);
       var f = C.AIRFIELDS.halcyon;
       if (staging === "cover") {
         // PEAK MOMENT, not a title screen: low final approach onto
@@ -375,7 +379,13 @@
         // sea in the near foreground. The old pose dived -1500 FPM
         // toward the ring and banked over the shoreline, which dragged
         // the beach shelf and the cowling into the frame.
-        resetPlane({ x: 560, y: 72, z: 180, heading: -Math.PI / 2 });
+        // ANGLE FIX (v6): nudged 20 m west and 20 m north of the old
+        // pose, so the dark pine cluster on the ridge no longer sits
+        // right on the nose line. Second nudge (v6 round 2): further
+        // south and west still — the ridge pines kept lining up with
+        // the nose from the first pose, so the sightline now passes
+        // south of the cluster and ring 1 sits ahead-left instead
+        resetPlane({ x: 500, y: 76, z: 120, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -45; s.vy = 0; s.vz = 0;
         s.throttle = 0.8;
@@ -389,16 +399,17 @@
         // All 8 rings banked on the way here (800 pts) after ~3:05 of
         // flying — the shot must read as the end of a real rally, not a
         // teleport with a zero score.
-        // ANGLE FIX (v5): start further out (620 m east, 62 m up) and
-        // capture earlier (~480 m out, ~27 m AGL) so the runway, PAPI
-        // and terminal still read ahead of the plane. The v4 attempt to
-        // capture closer (<220 m) timed out because the Kestrel sinks
-        // onto the runway before 220 m — so the plane is made bigger
-        // with a closer chase + narrower FOV instead (updateCamera).
+        // ANGLE FIX (v6): start closer in (540 m east, 54 m up) and
+        // capture at ~400 m out with a narrower FOV (updateCamera),
+        // so the runway reads a third bigger in the frame. The v4
+        // attempt to capture closer (<220 m) timed out because the
+        // Kestrel sinks onto the runway before 220 m — 400 m stays
+        // well clear of the touchdown point, so the plane is made
+        // bigger with camera + FOV + staging instead.
         Missions.presetProgress(C, game.mission, 8, 185);
         markRingsPassed(8);
         game.mission.messageT = 0;
-        resetPlane({ x: f.x + 620, y: f.elev + 62, z: f.z + 12, heading: -Math.PI / 2 });
+        resetPlane({ x: f.x + 540, y: f.elev + 54, z: f.z + 12, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -34; s.vy = -1.5; s.vz = 0;
         s.throttle = 0.35;
@@ -469,19 +480,22 @@
         // plane reads big AND the ring it just threaded still frames it
         // (a tight chase loses the ring the moment the plane passes it).
         var tight = game.staging === "cover";
-        // ANGLE FIX (v5): landing + complete get a close chase of their
+        // ANGLE FIX (v6): landing + complete get a closer chase of their
         // own — the old 12 m chase left the plane ~10% of the frame over
-        // a sea of grass. Back 9.5 m + a 52 deg FOV puts the Kestrel at
-        // ~a third of the frame with the runway and the airport ahead.
+        // a sea of grass. Back 8.5 m + a 46 deg FOV puts the Kestrel at
+        // ~a third of the frame with the runway and the airport ahead,
+        // and the look target reaches further down the strip so the
+        // runway fills the frame instead of the grass below the plane.
         // Cover moves closer too (17 -> 13.5 m) with more side offset so
         // the 3/4 view shows the nose and livery, not just the tail.
         var landTight = game.staging === "landing" || game.staging === "complete";
-        var back = tight ? 13.5 : (landTight ? 9.5 : 11 + s.speed * 0.04),
-          up = tight ? 3.2 : (landTight ? 2.6 : 3.2 + s.speed * 0.008);
-        // cover: sit slightly to the sun side so the plane reads in
-        // three-quarter view instead of dead-astern, big in frame with
-        // the runway, PAPI and terminal ahead of it
-        var side = tight ? 8 : (landTight ? 2.5 : 0);
+        var back = tight ? 13.5 : (landTight ? 8.5 : 11 + s.speed * 0.04),
+          up = tight ? 3.2 : (landTight ? 2.2 : 3.2 + s.speed * 0.008);
+        // ANGLE FIX (v6): a wider side offset (12 m, not 8) puts the
+        // chase at a true three-quarter rear angle, so the fuselage
+        // flank — and the KESTREL-9 name running along it — reads
+        // instead of the tail alone
+        var side = tight ? 12 : (landTight ? 2.5 : 0);
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -496,7 +510,7 @@
         } else if (landTight) {
           // look further ahead and a touch higher so the runway and the
           // airport fill the frame instead of the grass below the plane
-          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 18);
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 22);
           tmpV.y += 2.0;
         } else {
           tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 14);
@@ -509,7 +523,7 @@
         var k2 = 1 - Math.exp(-ldt * 7);
         camLook.lerp(tmpV, k2);
         camera.lookAt(camLook);
-        var wantFov = landTight ? 52 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
+        var wantFov = landTight ? 46 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
         camera.fov = lerp(camera.fov, wantFov, ldt * 3);
       }
       camera.updateProjectionMatrix();
@@ -621,7 +635,11 @@
         var e = evts[i];
         if (e.type === "touchdown") {
           audio.thud(clamp(e.vspeed / 9, 0.1, 1));
-          world.particles.burst(s.x, s.y + 0.5, s.z, 22, [0.8, 0.72, 0.55], 6, 0.5);
+          // touchdown dust from the config: a small tan puff that
+          // dies fast, so the end card never finds a white cloud
+          // sitting on the nose
+          var dust = C.DUST || { count: 12, speed: 3.2, up: 0.25, life: 0.45, color: [0.62, 0.55, 0.42] };
+          world.particles.burst(s.x, s.y + 0.5, s.z, dust.count, dust.color, dust.speed, dust.up, dust.life);
         } else if (e.type === "gear-up-landing") {
           audio.thud(1);
           world.particles.burst(s.x, s.y + 0.5, s.z, 30, [1.0, 0.6, 0.2], 8, 0.5);

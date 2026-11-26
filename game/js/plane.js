@@ -5,23 +5,40 @@
 (function (global) {
   "use strict";
 
+  // Fuselage skin, 512x512: canvas x runs AROUND the tube, canvas y
+  // runs ALONG it (y=0 is the nose, y=512 the tail). The canvas is
+  // square because the tube is nearly as long as it is round, so a
+  // name drawn along the length can have letters half a metre tall
+  // and still fit — the old 1024x256 skin squeezed the same name
+  // into letters 15 cm tall, which no chase camera could read. The
+  // name sits on the forward fuselage, clear of the tail band.
+  // Starboard (canvas x=128) reads tail to nose, port (x=384) nose
+  // to tail, so each side reads correctly from outside. Verify from
+  // a capture; flip a rotation if a side ever reads backwards.
   function liveryTexture() {
     var cv = document.createElement("canvas");
-    cv.width = 512; cv.height = 128;
+    cv.width = 512; cv.height = 512;
     var g = cv.getContext("2d");
-    g.fillStyle = "#f3ead6"; g.fillRect(0, 0, 512, 128);
-    g.fillStyle = "#0f6f6a"; g.fillRect(0, 86, 512, 42);
-    g.fillStyle = "#e8a91c"; g.fillRect(0, 78, 512, 8);
-    // panel stations + rivet rows so the fuselage reads up close
-    g.strokeStyle = "rgba(20,49,61,0.4)"; g.lineWidth = 2;
+    g.fillStyle = "#f3ead6"; g.fillRect(0, 0, 512, 512);
+    g.fillStyle = "#0f6f6a"; g.fillRect(0, 400, 512, 112);
+    g.fillStyle = "#e8a91c"; g.fillRect(0, 384, 512, 16);
+    // panel stations (rings around the tube) + rivet rows
+    g.strokeStyle = "rgba(20,49,61,0.45)"; g.lineWidth = 3;
     for (var px = 64; px < 512; px += 64) {
-      g.beginPath(); g.moveTo(px, 0); g.lineTo(px, 128); g.stroke();
+      g.beginPath(); g.moveTo(px, 0); g.lineTo(px, 512); g.stroke();
     }
-    g.fillStyle = "rgba(20,49,61,0.45)";
+    g.fillStyle = "rgba(20,49,61,0.5)";
     for (var rx = 32; rx < 512; rx += 32)
-      for (var ry = 12; ry < 128; ry += 24) g.fillRect(rx, ry, 2, 2);
-    g.fillStyle = "#14313d"; g.font = "bold 44px Arial"; g.textAlign = "center";
-    g.fillText("KESTREL-9", 256, 56);
+      for (var ry = 24; ry < 512; ry += 48) g.fillRect(rx, ry, 3, 3);
+    g.fillStyle = "#14313d"; g.font = "bold 66px Arial"; g.textAlign = "center";
+    // the name runs along the fuselage on both flanks: the canvas is
+    // mirrored by flipY, so the starboard flank needs +90 deg and the
+    // port flank -90 deg — a plain rotation the other way leaves the
+    // name upside-down, and a flip after it mirrors the letters, so
+    // each side gets its own bare rotation (round 3 proved it: the
+    // flip left the name reversed with mirrored letters on both flanks)
+    g.save(); g.translate(128, 200); g.rotate(Math.PI / 2); g.fillText("KESTREL-9", 0, 22); g.restore();
+    g.save(); g.translate(384, 200); g.rotate(-Math.PI / 2); g.fillText("KESTREL-9", 0, 22); g.restore();
     var tex = new THREE.CanvasTexture(cv);
     return tex;
   }
@@ -58,15 +75,18 @@
 
   function buildPlane() {
     var group = new THREE.Group();
-    var cream = new THREE.MeshStandardMaterial({ color: 0xf3ead6, roughness: 0.45, metalness: 0.25 });
+    // painted metal, not flat plastic: a lower roughness and a
+    // higher metalness let the low sun model the airframe instead
+    // of washing it out
+    var cream = new THREE.MeshStandardMaterial({ color: 0xf3ead6, roughness: 0.35, metalness: 0.25 });
     var teal = new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.4, metalness: 0.35 });
-    var gold = new THREE.MeshStandardMaterial({ color: 0xe8a91c, roughness: 0.3, metalness: 0.7 });
+    var gold = new THREE.MeshStandardMaterial({ color: 0xe8a91c, roughness: 0.3, metalness: 0.8 });
     var dark = new THREE.MeshStandardMaterial({ color: 0x1c2733, roughness: 0.6, metalness: 0.4 });
     var glass = new THREE.MeshStandardMaterial({ color: 0x9fd4e8, roughness: 0.08, metalness: 0.4, transparent: true, opacity: 0.75 });
 
     // fuselage: main tube + nose + tail cone, with livery texture
     var livTex = liveryTexture();
-    var bodyMat = new THREE.MeshStandardMaterial({ map: livTex, roughness: 0.45, metalness: 0.25 });
+    var bodyMat = new THREE.MeshStandardMaterial({ map: livTex, roughness: 0.32, metalness: 0.4 });
     var body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.5, 4.6, 14), bodyMat);
     body.rotation.x = Math.PI / 2;
     body.position.z = 0.2;

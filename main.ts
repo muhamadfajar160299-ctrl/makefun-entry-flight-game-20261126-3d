@@ -2,6 +2,8 @@
 // Copies game/ and screenshots/ from this repository into the output
 // directory and writes /output/dossier.json with buildDossier from the
 // kit's vendor/makefun-game.ts (copied unchanged into vendor/).
+// Fix v6: photoreal push, staged living-airport traffic, livery and
+// camera nits — the hand-in itself is unchanged (same copy + dossier).
 // Runs on Node 22 with the standard library only; no network, no installs.
 // Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output.
 
@@ -45,7 +47,7 @@ function main(): void {
   const dossierPath = join(OUT_DIR, "dossier.json");
   writeFileSync(dossierPath, Buffer.from(dossier));
   chmodSync(dossierPath, 0o644);
-  console.log(`Skylane Archipelago: copied ${gameFiles} game files, ${shotFiles} screenshots`);
+  console.log(`Skylane Archipelago (fix v6): copied ${gameFiles} game files, ${shotFiles} screenshots`);
   console.log(`dossier.json: ${dossier.byteLength} bytes`);
 }
 

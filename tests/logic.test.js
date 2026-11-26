@@ -361,5 +361,78 @@ check("airborne after takeoff", tk.s.airborne === true);
   check("ditching in the sea crashes", crashed);
 })();
 
+// ---- v6: staged traffic poses stay inside their lanes ---------------------
+(function () {
+  const lanes = { taxi: [-150, 210], truck: [-155, 40], cart: [-68, -18] };
+  ["cover", "landing", "complete", "cockpit"].forEach((staging) => {
+    Object.keys(lanes).forEach((key) => {
+      const pose = Phys.stagingTrafficPose(C, staging, key);
+      const f = C.AIRFIELDS.halcyon;
+      const dx = pose.x - f.x;
+      check("v6 " + staging + " " + key + " pose inside its lane",
+        pose && dx >= lanes[key][0] && dx <= lanes[key][1] && (pose.dir === 1 || pose.dir === -1),
+        "dx=" + dx + " dir=" + (pose && pose.dir));
+    });
+  });
+  check("v6 unknown staging falls back to no pose", Phys.stagingTrafficPose(C, "nope", "taxi") === null);
+  // the cover freeze line is x=105 (plane x at the freeze); the staged
+  // taxi sits ~65 m ahead of it on the taxiway, so it reads as a
+  // plane in the frame instead of a speck on the horizon
+  const taxiCover = Phys.stagingTrafficPose(C, "cover", "taxi");
+  check("v6 cover taxi sits ahead of the freeze line", taxiCover.x < 105 && 105 - taxiCover.x > 40 && 105 - taxiCover.x < 100,
+    "taxi x=" + taxiCover.x + " gap=" + (105 - taxiCover.x));
+  // the landing taxi holds at the east end of the taxiway, beside the
+  // threshold the landing camera is aimed at
+  const taxiLand = Phys.stagingTrafficPose(C, "landing", "taxi");
+  check("v6 landing taxi holds near the east threshold", taxiLand.x > 120 && taxiLand.x <= 170, "taxi x=" + taxiLand.x);
+})();
+
+// ---- v6: cloud keepout around the ring-1 approach leg -----------------------
+(function () {
+  check("v6 keepout catches a cloud on the ring-1 leg", Phys.inKeepout(C, 350, 100, 180) === true);
+  check("v6 keepout catches a low cloud over the leg", Phys.inKeepout(C, 200, 300, 150) === true);
+  check("v6 keepout leaves the high deck alone", Phys.inKeepout(C, 350, 450, 180) === false);
+  check("v6 keepout leaves clouds off the leg alone", Phys.inKeepout(C, -800, 100, 180) === false);
+  check("v6 keepout leaves clouds south of the leg alone", Phys.inKeepout(C, 350, 100, 500) === false);
+})();
+
+// ---- v6 round 3: no tall trees on the ring-1 leg (cockpit nose line) --------
+(function () {
+  check("v6 tree corridor catches the ridge crest on the leg", Phys.inTreeCorridor(C, 350, 150) === true);
+  check("v6 tree corridor covers the cockpit pose itself", Phys.inTreeCorridor(C, 500, 120) === true);
+  check("v6 tree corridor leaves the airfield alone", Phys.inTreeCorridor(C, 0, 0) === false);
+  check("v6 tree corridor leaves trees south of the leg alone", Phys.inTreeCorridor(C, 350, 400) === false);
+  check("v6 tree corridor leaves trees west of the leg alone", Phys.inTreeCorridor(C, -200, 150) === false);
+  check("v6 tree corridor covers the far ridge west of the ring", Phys.inTreeCorridor(C, 0, 190) === true);
+  check("v6 tree corridor covers the crest south of the leg", Phys.inTreeCorridor(C, 300, 260) === true);
+})();
+
+// ---- v6: touchdown dust is small, tan and short-lived ------------------------
+(function () {
+  const d = C.DUST;
+  check("v6 dust burst is small", d.count <= 12, "count=" + d.count);
+  check("v6 dust is slow and low", d.speed <= 4 && d.up <= 0.3, "speed=" + d.speed + " up=" + d.up);
+  check("v6 dust dies fast", d.life <= 0.5, "life=" + d.life);
+  check("v6 dust is dirt, not white smoke", Math.max.apply(null, d.color) <= 0.65, "color=" + d.color);
+})();
+
+// ---- v6: Halcyon label sits low enough to clear the complete frame -----------
+(function () {
+  check("v6 Halcyon label lowered from the v5 clip height", C.LABEL_DY.halcyon <= 32, "dy=" + C.LABEL_DY.halcyon);
+  check("v6 label heights defined for both airfields", C.LABEL_DY.northCay > 0 && C.LABEL_DY.halcyon > 0);
+})();
+
+// ---- v6: sun sits inside the westbound frames ---------------------------------
+(function () {
+  // the sun's azimuth is north of west but close enough that its disc
+  // falls inside the horizontal half-field of the narrowest chase
+  // (landing, FOV 46 -> ~37 deg) instead of glowing off-frame
+  const az = C.SUN_AZIMUTH;
+  const offWest = Math.abs(az + Math.PI / 2) * 180 / Math.PI; // deg north of due west
+  check("v6 sun disc inside the landing frame", offWest < 37, "off-west=" + offWest.toFixed(1) + " deg");
+  check("v6 sun is still a low western sun", offWest > 15 && C.SUN_ELEVATION < 0.4,
+    "off-west=" + offWest.toFixed(1) + " elev=" + C.SUN_ELEVATION);
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
