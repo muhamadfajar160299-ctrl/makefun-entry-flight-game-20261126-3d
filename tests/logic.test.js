@@ -558,5 +558,58 @@ check("airborne after takeoff", tk.s.airborne === true);
   check("v7 intercept completes on the home landing", m.done === true, "done=" + m.done);
 })();
 
+// ---- v7 fix: touchdown levels the plane, fight stands down, wreck leaves ------
+(function () {
+  // banked 0.5 rad on final over the Halcyon runway, gentle sink:
+  // touchdown must leave the plane wings-level on its gear, not
+  // frozen at a residual bank in the end card (v7 complete shot)
+  const s = Phys.makeState(C, { x: -40, y: 26.1, z: -60, heading: -Math.PI / 2 });
+  s.onGround = false; s.airborne = true;
+  s.vx = -25; s.vy = -1.5; s.vz = 0;
+  s.roll = 0.5; s.pitch = -0.05; s.throttle = 0.3; s.gearDown = true;
+  let evts = [];
+  for (let i = 0; i < 120 && !s.onGround; i++) {
+    evts = Phys.update(C, s, 1 / 60, { pitch: 0, roll: 0, yaw: 0 }, 0);
+  }
+  check("v7 touchdown happens on the runway", s.onGround === true, "onGround=" + s.onGround);
+  check("v7 touchdown zeroes the roll", s.roll === 0, "roll=" + s.roll);
+  check("v7 touchdown zeroes the pitch", s.pitch === 0, "pitch=" + s.pitch);
+  check("v7 touchdown is not a crash", s.crashed === false, "crashed=" + s.crashed);
+
+  // standDown clears the lock a mission-complete must not show
+  const cb = Combat.makeCombat(C, { missionId: "intercept" });
+  const air = Phys.makeState(C, { x: 0, y: 100, z: 0, heading: 0 });
+  air.onGround = false; air.airborne = true;
+  const e = Combat.spawnEnemy(C, cb, air, { x: 0, y: 100, z: -200 });
+  Combat.update(C, cb, 0.1, air, false);
+  check("v7 lock is lit before standDown", cb.lock === e && cb.lockDist > 0, "lock=" + (cb.lock && cb.lock.id));
+  cb.autoFire = true;
+  Combat.standDown(cb);
+  check("v7 standDown clears the lock", cb.lock === null && cb.lockDist === 0, "lock=" + cb.lock);
+  check("v7 standDown stops guns and spawns", cb.autoFire === false && cb.spawn === false, "autoFire=" + cb.autoFire + " spawn=" + cb.spawn);
+
+  // a splashed drone's mesh leaves the scene with it — no ghost
+  // wreck hovering inside its own explosion smoke (v7 ring-run shot)
+  const cb2 = Combat.makeCombat(C, { missionId: "intercept" });
+  const removed = [];
+  cb2.viz = { scene: { remove: function (m) { removed.push(m); } } };
+  const e2 = Combat.spawnEnemy(C, cb2, air, { x: 0, y: 100, z: -200 });
+  const fakeMesh = { fake: true };
+  e2.mesh = fakeMesh;
+  Combat.destroyEnemy(C, cb2, e2);
+  check("v7 destroyed drone mesh removed from scene", removed.indexOf(fakeMesh) !== -1, "removed=" + removed.length);
+  check("v7 destroyed drone mesh nulled", e2.mesh === null, "mesh=" + e2.mesh);
+  // explosions are short-lived now: mostly faded a second after the kill
+  check("v7 explosion life is 1.5 s", cb2.booms.length === 1 && cb2.booms[0].maxLife === 1.5,
+    "maxLife=" + (cb2.booms[0] && cb2.booms[0].maxLife));
+  check("v7 explosion cap is 4", (function () {
+    for (let i = 0; i < 6; i++) {
+      const d = Combat.spawnEnemy(C, cb2, air, { x: 0, y: 100, z: -200 - i * 10 });
+      Combat.destroyEnemy(C, cb2, d);
+    }
+    return cb2.booms.length === 4;
+  })(), "booms=" + cb2.booms.length);
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

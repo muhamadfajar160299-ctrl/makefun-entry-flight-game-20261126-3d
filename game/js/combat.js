@@ -121,6 +121,16 @@
     return cb;
   }
 
+  // Stand the fight down (mission complete / crash): the lock, the
+  // guns and the spawner all stop at once, so no combat HUD element
+  // can survive into the end card — the lock used to freeze on its
+  // last drone because combat updates stop when the mission is done
+  // and the HUD is never redrawn in the complete state.
+  function standDown(cb) {
+    cb.lock = null; cb.lockDist = 0;
+    cb.autoFire = false; cb.spawn = false;
+  }
+
   function pushBoom(C, cb, x, y, z) {
     var shards = [];
     for (var i = 0; i < 6; i++) {
@@ -133,7 +143,11 @@
         rx: Math.random() * 6, rz: Math.random() * 6,
       });
     }
-    cb.booms.push({ x: x, y: y, z: z, life: 2.0, maxLife: 2.0, shards: shards, viz: null });
+    // an explosion blooms fast and is mostly gone a second later, so
+    // a kill the plane is flying towards never looms over the camera
+    // as a giant smoke mass at the freeze (v7: 2.0 s life left it at
+    // half strength right next to the lens in the ring-run shot)
+    cb.booms.push({ x: x, y: y, z: z, life: 1.5, maxLife: 1.5, shards: shards, viz: null });
     if (cb.booms.length > 4) cb.booms.shift();
     if (cb.fx) { cb.fx("boom", x, y, z); }
   }
@@ -141,6 +155,11 @@
   function destroyEnemy(C, cb, e) {
     if (e.dead) return;
     e.dead = true;
+    // take the wreck with it: the mesh used to stay in the scene after
+    // the drone left the enemies list, so a dead drone hovered intact
+    // inside its own explosion smoke — the red drone in the v7
+    // ring-run shot's giant smoke blob
+    if (e.mesh && cb.viz && cb.viz.scene) { cb.viz.scene.remove(e.mesh); e.mesh = null; }
     cb.kills++;
     var cfg = C.COMBAT || {};
     var pts = cfg.killScore || 150;
@@ -434,19 +453,22 @@
       boom.viz.group.position.set(boom.x, boom.y, boom.z);
       boom.viz.group.visible = true;
       // a hot core, not a balloon: small, deep orange, gone fast —
-      // the fire-coloured particle burst carries the rest of the blast
-      boom.viz.flash.scale.setScalar(2 + age * 5);
+      // the fire-coloured particle burst carries the rest of the blast.
+      // Kept small on purpose: the plane flies towards its kill, so
+      // a fast-growing flash + smoke reads as a giant glitch blob
+      // once the camera closes to ~50 m (v7 ring-run shot)
+      boom.viz.flash.scale.setScalar(2 + age * 3);
       boom.viz.flash.material.opacity = Math.max(0, 0.9 - age * 1.3);
       for (var s2 = 0; s2 < boom.viz.smokes.length; s2++) {
         var sm = boom.viz.smokes[s2];
-        sm.scale.setScalar(1.0 + age * 2.5);
-        sm.material.opacity = Math.max(0, 0.45 - age * 0.35);
+        sm.scale.setScalar(1.0 + age * 1.5);
+        sm.material.opacity = Math.max(0, 0.45 - age * 0.6);
       }
       for (var q = 0; q < boom.viz.shards.length; q++) {
         var shm = boom.viz.shards[q], shd = boom.shards[q];
         shm.position.set(shd.x, shd.y, shd.z);
         shm.rotation.set(shd.rx, 0, shd.rz);
-        shm.visible = age < 0.9;
+        shm.visible = age < 0.7;
       }
     }
     for (var b2 = bi; b2 < v.boomPool.length; b2++) v.boomPool[b2].group.visible = false;
@@ -469,6 +491,7 @@
     fireGun: fireGun, destroyEnemy: destroyEnemy, update: update,
     accuracy: accuracy, presetKills: presetKills,
     attachVisuals: attachVisuals, render: render, clearVisuals: clearVisuals,
+    standDown: standDown,
     forwardOf: forwardOf, aliveEnemies: aliveEnemies,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

@@ -201,6 +201,17 @@
 
     function endMissionComplete() {
       var m = game.mission;
+      // stand the fight down first: clear the lock and stop the guns /
+      // spawner, and hide the lock element outright — the HUD is never
+      // redrawn once the state flips to complete, so a stale LOCK
+      // would sit on the end card forever (v7 complete shot)
+      if (game.combat && Combat) Combat.standDown(game.combat);
+      var lockEl = $("hud-lock");
+      if (lockEl) lockEl.classList.add("hidden");
+      // level the plane on its gear for the end card: belt and braces
+      // next to the physics touchdown levelling, so the final chase
+      // frame (same frame, below) renders it wings-level
+      s.pitch = 0; s.roll = 0;
       // the second line only names the goals this mission actually
       // has: a ring rally never dropped a crate, so "Crates on
       // target 0/3" must not appear there
@@ -508,10 +519,16 @@
           game.combatKillAt = 1.3; game.combatFreezeAt = 2.0;
         } else {
           // ring run with a fight on: the gate rally, drones on the
-          // ring-1 leg, the lock lit and tracers out
+          // ring-1 leg, the lock lit and tracers out. Drones sit
+          // further ahead than the v7 offsets (nearest 190 m, not
+          // 150): the plane closes ~70 m before the freeze, and a
+          // kill at 150 m ended up ~55 m from the lens, its flash +
+          // smoke + ghost mesh filling a whole corner as a giant blob.
+          // Freeze is earlier too (1.6 s, not 2.0), so the scripted
+          // kill is caught mid-bloom while still far downrange
           cPose = { x: 500, y: 76, z: 120, heading: -Math.PI / 2 };
-          cOffs = [[150, 12, 30], [260, 25, -60], [210, 5, 90], [300, 40, -20]];
-          game.combatKillAt = 1.3; game.combatFreezeAt = 2.0;
+          cOffs = [[190, 12, 30], [280, 25, -60], [240, 5, 90], [320, 40, -20]];
+          game.combatKillAt = 1.3; game.combatFreezeAt = 1.6;
         }
         resetPlane(cPose);
         s.onGround = false; s.airborne = true;
@@ -624,17 +641,32 @@
         // Cover moves closer too (17 -> 13.5 m) with more side offset so
         // the 3/4 view shows the nose and livery, not just the tail.
         var landTight = game.staging === "landing" || game.staging === "complete";
+        // v8: the combat-complete end card needs its own angle — the
+        // tight rear chase puts the tail fin ("9K") huge in the
+        // foreground and the pale plane vanishes against the bright
+        // strip. A three-quarter rear-side view shows the fuselage
+        // flank + livery against grass/hills instead.
         // v7 combat chase: pulled back with a side offset, a true
         // three-quarter rear view — the guns, the tracers and the
-        // drones ahead all read in the frame instead of the tail
+        // drones ahead all read in the frame instead of the tail.
+        // Ring-run staging sits a touch tighter (the v7 frame left the
+        // plane small at the left edge behind its own explosion)
         var combatView = !!game.combat;
-        var back = tight ? 13.5 : (landTight ? 8.5 : (combatView ? 15 : 11 + s.speed * 0.04)),
-          up = tight ? 3.2 : (landTight ? 2.2 : (combatView ? 4.2 : 3.2 + s.speed * 0.008));
+        var ringTight = game.staging === "ringcombat";
+        // v8d: third pass (back 7 / up 1.8 / side 10) backfired —
+        // closer + lower put the tail fin ("9K") huge again while
+        // the fuselage foreshortened away. The v8b side profile
+        // (back 10 / up 2.0 / side 14) read best: keep its angle,
+        // pull slightly closer and tighten FOV so the Kestrel fills
+        // ~a third of the frame instead of a fifth.
+        var completeView = game.staging === "combatcomplete";
+        var back = tight ? 13.5 : (landTight ? 8.5 : (completeView ? 9 : (combatView ? (ringTight ? 13 : 15) : 11 + s.speed * 0.04))),
+          up = tight ? 3.2 : (landTight ? 2.2 : (completeView ? 2.2 : (combatView ? (ringTight ? 3.8 : 4.2) : 3.2 + s.speed * 0.008)));
         // ANGLE FIX (v6): a wider side offset (12 m, not 8) puts the
         // chase at a true three-quarter rear angle, so the fuselage
         // flank — and the KESTREL-9 name running along it — reads
         // instead of the tail alone
-        var side = tight ? 12 : (landTight ? 2.5 : (combatView ? 9 : 0));
+        var side = tight ? 12 : (landTight ? 2.5 : (completeView ? 12 : (combatView ? (ringTight ? 7 : 9) : 0)));
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -646,6 +678,11 @@
         if (tight) {
           tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 20);
           tmpV.y += 2.0;
+        } else if (completeView) {
+          // aim at the plane itself with a little strip ahead so the
+          // Kestrel stays centred and the runway reads behind it
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 4);
+          tmpV.y += 1.0;
         } else if (landTight) {
           // look further ahead and a touch higher so the runway and the
           // airport fill the frame instead of the grass below the plane
@@ -662,7 +699,7 @@
         var k2 = 1 - Math.exp(-ldt * 7);
         camLook.lerp(tmpV, k2);
         camera.lookAt(camLook);
-        var wantFov = landTight ? 46 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16;
+        var wantFov = landTight ? 46 : (completeView ? 44 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16);
         camera.fov = lerp(camera.fov, wantFov, ldt * 3);
       }
       camera.updateProjectionMatrix();
@@ -692,12 +729,15 @@
       SkylaneWorld.update(world, visDt, game.time, quality);
       // in-world labels fade out up close so the plane never flies
       // through a giant wall of text; they read from the air, not from
-      // on top of the sign
+      // on top of the sign. Once the end card is up they go away
+      // entirely: the 46 m HALCYON FIELD sprite still reads as a pale
+      // watermark across the sky even at 0.12 opacity (v7 complete shot)
       if (world.labels) {
         for (var li = 0; li < world.labels.length; li++) {
           var lb = world.labels[li];
           var ld = lb.position.distanceTo(camera.position);
-          lb.material.opacity = clamp((ld - 80) / 150, 0, 0.9);
+          lb.material.opacity = (game.state === "complete" || game.state === "crashed")
+            ? 0 : clamp((ld - 80) / 150, 0, 0.9);
         }
       }
       if (game.state === "flying" && s) {

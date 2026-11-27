@@ -140,10 +140,13 @@
         $("hud-target-dist").textContent = "";
       }
       // target lock: nearest enemy drone with its distance, red and
-      // loud — the thing a still screenshot must show is happening
+      // loud — the thing a still screenshot must show is happening.
+      // Never after the mission is done: the lock used to survive
+      // into the end card (combat updates stop at mission-done and
+      // the HUD is never redrawn in the complete state)
       var lockEl = $("hud-lock");
       if (lockEl) {
-        if (combat && combat.lock) {
+        if (combat && combat.lock && !(mission && mission.done)) {
           lockEl.textContent = "◉ LOCK — DRONE " + fmtDist(combat.lockDist);
           lockEl.classList.remove("hidden");
         } else lockEl.classList.add("hidden");

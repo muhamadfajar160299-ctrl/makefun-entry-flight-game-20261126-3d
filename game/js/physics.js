@@ -350,7 +350,10 @@
         }
         s.onGround = true; s.airborne = false;
         s.y = g; s.vy = 0;
-        s.pitch = 0; s.roll *= 0.4;
+        // level on the gear: the old 0.4x residual bank froze into the
+        // end card (physics stops at mission-complete), so the landed
+        // plane read as tipped / rolled over in the v7 complete shot
+        s.pitch = 0; s.roll = 0;
         // keep rolling speed along heading
         var fsp = Math.sqrt(s.vx * s.vx + s.vz * s.vz);
         var fhx = Math.sin(s.heading), fhz = -Math.cos(s.heading);
