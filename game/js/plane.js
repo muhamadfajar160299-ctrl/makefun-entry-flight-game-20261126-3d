@@ -43,16 +43,6 @@
     return tex;
   }
 
-  function tailTexture() {
-    var cv = document.createElement("canvas");
-    cv.width = 128; cv.height = 128;
-    var g = cv.getContext("2d");
-    g.fillStyle = "#0f6f6a"; g.fillRect(0, 0, 128, 128);
-    g.fillStyle = "#f3ead6"; g.font = "bold 52px Arial"; g.textAlign = "center";
-    g.fillText("9K", 64, 82);
-    return new THREE.CanvasTexture(cv);
-  }
-
   // Wing skin: cream with rib stations, a gold stripe and rivet rows,
   // so the wing reads as built metal up close instead of a flat slab.
   function wingTexture() {
@@ -78,6 +68,10 @@
   // plane against the pale runway instead of vanishing into it.
   // The cream livery above is the flight livery; this one is only
   // swapped in by the end-card staging, never in flight.
+  // v11: the wings stay CREAM in the dark livery — the old dark
+  // (teal) wing material made the wings the same shade as the teal
+  // fuselage, so they vanished against it; cream wings read against
+  // the teal fuselage and the grey runway. Only body/nose/tail swap.
   function liveryTextureDark() {
     var cv = document.createElement("canvas");
     cv.width = 512; cv.height = 512;
@@ -98,22 +92,6 @@
     return new THREE.CanvasTexture(cv);
   }
 
-  function wingTextureDark() {
-    var cv = document.createElement("canvas");
-    cv.width = 256; cv.height = 128;
-    var g = cv.getContext("2d");
-    g.fillStyle = "#0f6f6a"; g.fillRect(0, 0, 256, 128);
-    g.fillStyle = "#e8a91c"; g.fillRect(0, 8, 256, 10);
-    g.strokeStyle = "rgba(243,234,214,0.35)"; g.lineWidth = 2;
-    for (var x = 32; x < 256; x += 32) {
-      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 128); g.stroke();
-    }
-    g.fillStyle = "rgba(243,234,214,0.4)";
-    for (var rx = 16; rx < 256; rx += 32)
-      for (var ry = 30; ry < 128; ry += 24) g.fillRect(rx, ry, 2, 2);
-    return new THREE.CanvasTexture(cv);
-  }
-
   function buildPlane() {
     var group = new THREE.Group();
     // painted metal, not flat plastic: a lower roughness and a
@@ -130,7 +108,6 @@
     var bodyMat = new THREE.MeshStandardMaterial({ map: livTex, roughness: 0.32, metalness: 0.4 });
     // end-card dark livery (swapped in by applyDarkLivery only)
     var darkBodyMat = new THREE.MeshStandardMaterial({ map: liveryTextureDark(), roughness: 0.32, metalness: 0.4 });
-    var darkWingMat = new THREE.MeshStandardMaterial({ map: wingTextureDark(), roughness: 0.4, metalness: 0.3 });
     var darkCream = new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.35, metalness: 0.25 });
     var body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.5, 4.6, 14), bodyMat);
     body.rotation.x = Math.PI / 2;
@@ -189,9 +166,30 @@
     stab.position.set(0, 0.12, 4.3);
     stab.castShadow = true;
     group.add(stab);
-    var finMat = new THREE.MeshStandardMaterial({ map: tailTexture(), roughness: 0.4, metalness: 0.3 });
-    var fin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.25, 1.1), finMat);
-    fin.position.set(0, 0.7, 4.35);
+    // fin: swept, with a LONG root chord that runs down into the tail
+    // cone, so it reads as part of the tail — the old 1.1 x 1.25 m box
+    // stood on a tail cone of radius ~0.09 at z = 4.35 and read as a
+    // detached green signboard from any side angle (v9/v10), and the
+    // "9K" text on its flat face was half that read. The shape is a
+    // 2D side profile (u = tail-ward from z = 2.9, v = up) extruded
+    // 0.1 m thick; its bottom edge sits at v = 0, inside the cone
+    // along the whole 1.65 m root, so the visible fin emerges from
+    // the cone instead of floating above it. Plain teal, no text.
+    var finShape = new THREE.Shape();
+    finShape.moveTo(0, 0);
+    finShape.lineTo(0.7, 1.05);
+    finShape.lineTo(1.1, 1.25);
+    finShape.lineTo(1.45, 1.25);
+    finShape.lineTo(1.65, 0);
+    finShape.lineTo(0, 0);
+    var fin = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(finShape, { depth: 0.1, bevelEnabled: false }), teal);
+    // shape u -> plane +z (tail-ward), v -> +y, extrude -> -x:
+    // rotation.y = -PI/2 maps local (u, v, w) to (-w, v, u), so the
+    // shape origin lands at z = 2.9 and the 0.1 thickness centres on
+    // x = 0 with position.x = 0.05
+    fin.rotation.y = -Math.PI / 2;
+    fin.position.set(0.05, 0, 2.9);
     fin.castShadow = true;
     group.add(fin);
 
@@ -263,7 +261,7 @@
       navL: navL, navR: navR, strobe: strobe,
       trailL: trailL, trailR: trailR,
       parts: { body: body, nose: nose, tail: tail, wings: wingPanels, fin: fin },
-      darkMats: { body: darkBodyMat, cream: darkCream, wing: darkWingMat, fin: teal },
+      darkMats: { body: darkBodyMat, cream: darkCream, fin: teal },
     };
   }
 
@@ -271,20 +269,18 @@
   // the parked Kestrel reads against the pale runway. Called from
   // the combatcomplete staging; no other staging or gameplay path
   // uses it, so the flight shots keep the cream livery.
+  // v11: the wings are NOT swapped — they keep the cream flight
+  // material, so they read against the teal fuselage and the grey
+  // runway instead of vanishing into the teal (the v9/v10 end cards
+  // wore teal wings on a teal fuselage). The fin keeps its plain
+  // teal (v11 swept fin, no text, root sunk into the tail cone).
   function applyDarkLivery(pl) {
     if (!pl || !pl.parts || !pl.darkMats) return;
     pl.parts.body.material = pl.darkMats.body;
     pl.parts.nose.material = pl.darkMats.cream;
     pl.parts.tail.material = pl.darkMats.cream;
-    for (var i = 0; i < pl.parts.wings.length; i++) pl.parts.wings[i].material = pl.darkMats.wing;
-    // the fin reads as a separate teal signboard from the side —
-    // proven by probe: hiding it leaves a clean tapering tail,
-    // while its flat 1.1 x 1.25 m face is a uniform rectangle that
-    // no livery or repositioning fixes (it floats free of the
-    // fuselage because the tail cone tapers to a hairline where
-    // the fin stands). The end card hides the fin; the flight
-    // shots keep it.
-    pl.parts.fin.visible = false;
+    pl.parts.fin.visible = true;
+    pl.parts.fin.material = pl.darkMats.fin;
   }
 
   function pushTrail(trail, x, y, z) {

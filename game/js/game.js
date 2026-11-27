@@ -658,24 +658,24 @@
         // plane small at the left edge behind its own explosion)
         var combatView = !!game.combat;
         var ringTight = game.staging === "ringcombat";
-        // v9: Larisha looked at the v8 frame and the plane is NOT
-        // visible ("Kaga keliatan") — she is right: the rear-side
-        // angle foreshortens the fuselage to a pale blob on pale
-        // runway, and the fin reads as a separate "9K" signboard.
-        // Go pure side profile from the SOUTH side (side -14): the
-        // full flank + KESTREL-9 name + fin at the tail end read as
-        // one aircraft, the cream fuselage sits against the dark
-        // north grass and hills instead of the bright strip, and
-        // the terminal/taxiway stay behind the camera. Back 2.5 /
-        // up 1.6 / FOV 38 puts the Kestrel at ~40% of the frame.
+        // v10c: v10b still fails the stranger test — the fin reads
+        // as a detached green board and only one wing shows as a
+        // blob. Root cause: at 45 deg off the nose the fin's broad
+        // face still projects large, and the wings point toward/away
+        // from the camera so they foreshorten. Go mostly FRONT-above
+        // (side -5, back -10, up 6.5, FOV 36, ~27 deg off the nose
+        // axis, ~30 deg down): the fin's face projects to a thin
+        // sliver (sin 27 deg), the prop faces the camera, and the
+        // wingspan runs ACROSS the screen so both wings spread
+        // visibly left-right instead of foreshortening into blobs.
         var completeView = game.staging === "combatcomplete";
-        var back = tight ? 13.5 : (landTight ? 8.5 : (completeView ? 2.5 : (combatView ? (ringTight ? 13 : 15) : 11 + s.speed * 0.04))),
-          up = tight ? 3.2 : (landTight ? 2.2 : (completeView ? 1.0 : (combatView ? (ringTight ? 3.8 : 4.2) : 3.2 + s.speed * 0.008)));
+        var back = tight ? 13.5 : (landTight ? 8.5 : (completeView ? -10 : (combatView ? (ringTight ? 13 : 15) : 11 + s.speed * 0.04))),
+          up = tight ? 3.2 : (landTight ? 2.2 : (completeView ? 6.5 : (combatView ? (ringTight ? 3.8 : 4.2) : 3.2 + s.speed * 0.008)));
         // ANGLE FIX (v6): a wider side offset (12 m, not 8) puts the
         // chase at a true three-quarter rear angle, so the fuselage
         // flank — and the KESTREL-9 name running along it — reads
         // instead of the tail alone
-        var side = tight ? 12 : (landTight ? 2.5 : (completeView ? -14 : (combatView ? (ringTight ? 7 : 9) : 0)));
+        var side = tight ? 12 : (landTight ? 2.5 : (completeView ? -5 : (combatView ? (ringTight ? 7 : 9) : 0)));
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -688,9 +688,11 @@
           tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 20);
           tmpV.y += 2.0;
         } else if (completeView) {
-          // aim at the plane itself with a little strip ahead so the
-          // Kestrel stays centred and the runway reads behind it
-          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 4);
+          // v10: front three-quarter — aim 2 m ahead of the plane
+          // centre (toward the nose) so the big Kestrel sits
+          // centre-right, clear of the left-docked end card, instead
+          // of dead centre under it
+          tmpV.copy(planeObj.group.position).addScaledVector(tmpF, 2);
           tmpV.y += 1.0;
         } else if (landTight) {
           // look further ahead and a touch higher so the runway and the
@@ -773,6 +775,32 @@
           if (s.crashed) break;
         }
         if (n >= 60) acc = 0;
+        // v11: park the plane ON its gear for the end card. Physics
+        // parks the plane CENTRE at terrain height, so the wheels sit
+        // 0.9 m underground, the belly 0.62 m under, and the wings
+        // under the runway strip (the strip mesh sits at elev + 0.25)
+        // — the wings were drawn every frame but occluded (diag-v12:
+        // submitted to the GPU, 0 pixels; the same wings render fine
+        // in flight, see shot 03). Lift the parked pose so the wheel
+        // bottoms (1.16 m below centre) touch the surface: +0.25 when
+        // the plane is standing on a runway strip.
+        // This MUST run here, after the physics substeps — not in
+        // endMissionComplete, which runs mid-loop: the next substep's
+        // ground roll resets s.y to terrain height and undoes it.
+        // updateCamera (same tick, below) syncs the group position
+        // from s, so the final frame renders the lifted pose.
+        if (game.state === "complete") {
+          var gy = Phys.terrainHeight(s.x, s.z, C);
+          for (var fk in C.AIRFIELDS) {
+            var ff = C.AIRFIELDS[fk];
+            var fhd = ff.headingDeg * Math.PI / 180;
+            var flx = Math.sin(fhd), flz = -Math.cos(fhd);
+            var frx = s.x - ff.x, frz = s.z - ff.z;
+            var falong = frx * flx + frz * flz, facross = -frx * flz + frz * flx;
+            if (Math.abs(falong) <= ff.length / 2 && Math.abs(facross) <= ff.width / 2) { gy += 0.25; break; }
+          }
+          s.y = gy + 1.16;
+        }
         // Cover staging: freeze just past the threshold on final
         // (low over runway 27, gear down, PAPI + terminal + taxiing
         // traffic in frame) so the shot is the peak moment of the
