@@ -195,7 +195,23 @@
     crateMax: 150,
     landingMax: 200,
     timeBonusMax: 300,
-    parTime: { gate: 150, hop: 240, drop: 210, free: 0, night: 150, emergency: 120 },
+    parTime: { gate: 150, hop: 240, drop: 210, free: 0, night: 150, emergency: 120, intercept: 300 },
+  };
+
+  // ---- combat (v7): nose guns vs enemy drones ------------------------------
+  C.COMBAT = {
+    gunRange: 520,         // m — tracers reach this far
+    gunCooldown: 0.09,     // s between rounds (~11 / s)
+    hitRadius: 9,          // m — how close a tracer must pass a drone (matches the 1.5x drone's wingspan)
+    bulletSpeed: 260,      // m/s — used to lead a moving drone
+    droneHp: 2,            // hits to splash one drone
+    droneSpeed: 42,        // m/s cruise on its attack orbit
+    maxAlive: 3,           // drones in the air at once
+    interceptKills: 5,     // drones to splash in the dogfight mission
+    killScore: 150,        // pts per drone splashed
+    hitScore: 25,          // pts per tracer hit
+    spawnDelay: 2.5,       // s between replacement drones
+    lockRange: 800,        // m — HUD lock shows the nearest drone inside this
   };
 
   // ---- missions ---------------------------------------------------------------
@@ -237,6 +253,13 @@
       short: "Land NOW — fuel leaking",
       short2: "Any safe landing counts",
       fuelStart: 0.35, fuelLeak: 1 / 360,
+    },
+    {
+      id: "intercept", num: 7, name: "Intercept — Dogfight",
+      brief: "Enemy drones are raiding the isles. Splash 5 of them, then bring the Kestrel-9 home to Halcyon Field. Hold CLICK or X to fire — the HUD locks the nearest drone.",
+      short: "Splash 5 enemy drones (0/5)",
+      short2: "Land at Halcyon Field",
+      combat: true, kills: 5,
     },
   ];
 

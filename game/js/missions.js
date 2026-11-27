@@ -59,6 +59,20 @@
       var f = C.AIRFIELDS.halcyon;
       return { x: f.x, y: f.elev + 2, z: f.z, label: "HALCYON FIELD", kind: "land", r: 60 };
     }
+    if (m.id === "intercept") {
+      var need = m.def.kills || 5;
+      if (m.combat && m.combat.kills < need) {
+        // the nav target is the first live drone; the HUD lock
+        // (computed with the player's position in the combat module)
+        // always names the nearest one with its distance
+        for (var i = 0; i < m.combat.enemies.length; i++) {
+          var en = m.combat.enemies[i];
+          if (!en.dead) return { x: en.x, y: en.y, z: en.z, label: "DRONE — INTERCEPT", kind: "drone", r: 10 };
+        }
+      }
+      var hf = C.AIRFIELDS.halcyon;
+      return { x: hf.x, y: hf.elev + 2, z: hf.z, label: "HALCYON FIELD", kind: "land", r: 60 };
+    }
     if (m.id === "emergency") {
       // Halcyon is home and the Mayday starts on its runway, so the
       // nearest strip is always the one under the plane's nose
@@ -157,6 +171,12 @@
           // Mayday: any survivable touchdown counts — the strip, a
           // field, the beach. Surviving IS the mission.
           finish(C, m, e.quality);
+        } else if (m.id === "intercept") {
+          var needI = m.def.kills || 5;
+          var killsI = m.combat ? m.combat.kills : 0;
+          if (killsI >= needI && e.field === "HAL") finish(C, m, e.quality);
+          else if (killsI >= needI) say(m, "Drones are down — but land at Halcyon Field to finish!", 5);
+          else say(m, "Landed early — " + (needI - killsI) + " drones still in the air. Take off and keep hunting!", 5);
         } else if (m.id === "hop") {
           var want = m.hopsDone === 0 ? "NCY" : "HAL";
           if (e.field === want) {
@@ -201,6 +221,10 @@
     if (m.id === "gate") return { a: "Fly all 8 golden rings (" + m.ringsHit + "/8)", b: "Land at Halcyon Field", doneA: m.ringsHit >= 8, doneB: m.done };
     if (m.id === "night") return { a: "Fly all 4 night rings (" + m.ringsHit + "/4)", b: "Land at Halcyon Field, guided by the lights", doneA: m.ringsHit >= 4, doneB: m.done };
     if (m.id === "emergency") return { a: "MAYDAY — land at the nearest strip", b: "Fuel " + Math.round((m.fuelPct !== undefined ? m.fuelPct : 1) * 100) + "% — leaking fast", doneA: false, doneB: m.done };
+    if (m.id === "intercept") {
+      var k = m.combat ? m.combat.kills : 0, needP = m.def.kills || 5;
+      return { a: "Splash the enemy drones (" + k + "/" + needP + ")", b: "Land at Halcyon Field", doneA: k >= needP, doneB: m.done };
+    }
     if (m.id === "hop") return { a: "Land at North Cay Strip (" + Math.min(m.hopsDone, 1) + "/1)", b: "Return and land at Halcyon Field", doneA: m.hopsDone >= 1, doneB: m.done };
     if (m.id === "drop") return { a: "Drop crates on the harbor targets (" + m.cratesHit + "/3)", b: "Land at Halcyon Field (optional)", doneA: m.cratesHit >= 3, doneB: m.done };
     return { a: "Fly free — enjoy the golden hour", b: "Land anywhere to finish", doneA: false, doneB: m.done };

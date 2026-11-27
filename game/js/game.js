@@ -8,6 +8,7 @@
   var C = global.SKYLANE_CONFIG;
   var Phys = global.SkylanePhysics;
   var Missions = global.SkylaneMissions;
+  var Combat = global.SkylaneCombat;
 
   function $(id) { return document.getElementById(id); }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -65,10 +66,13 @@
       state: "menu", mission: null, camMode: "chase",
       time: 0, staging: null, autopilot: false,
       lookYaw: 0, lookPitch: 0, pointerLocked: false,
+      combat: null, combatPreFrozen: false, combatScripted: false,
+      combatKillAt: 1.2, combatFreezeAt: 1.9,
     };
     var s = null; // physics state
-    var input = { throttleDelta: 0, throttleSet: null, pitch: 0, roll: 0, yaw: 0, gearToggle: false, flapToggle: false, brake: false };
+    var input = { throttleDelta: 0, throttleSet: null, pitch: 0, roll: 0, yaw: 0, gearToggle: false, flapToggle: false, brake: false, firing: false };
     var keys = {};
+    var mouseFire = false; // hold the mouse button to fire the guns
     var crates = []; // {mesh, chute}
     var camPos = new THREE.Vector3(0, 40, 40);
     var camLook = new THREE.Vector3(0, 30, 0);
@@ -128,6 +132,33 @@
       // every sortie starts with the same traffic picture
       SkylaneWorld.resetTraffic(world);
       Missions.start(C, game.mission);
+      // v7 combat: the intercept is a dogfight from the off, free
+      // flight carries optional targets, and the combat stagings
+      // force a fight onto any sortie for the screenshots
+      if (game.combat && Combat) { Combat.clearVisuals(game.combat); game.combat = null; }
+      game.combatPreFrozen = false; game.combatScripted = false;
+      var combatOn = def.combat || id === "free" ||
+        game.staging === "combat" || game.staging === "coast" || game.staging === "ringcombat";
+      if (combatOn && Combat) {
+        game.combat = Combat.makeCombat(C, {
+          missionId: id, killsNeeded: def.kills || C.COMBAT.interceptKills,
+          spawn: !!def.combat || id === "free",
+        });
+        game.combat.terrainH = function (x, z) { return Phys.terrainHeight(x, z, C); };
+        game.combat.fx = function (kind, x, y, z) {
+          if (kind === "boom") {
+            world.particles.burst(x, y, z, 40, [1.0, 0.6, 0.15], 14, 0.6);
+            world.particles.burst(x, y, z, 24, [0.25, 0.22, 0.2], 6, 0.5);
+          } else if (kind === "smoke") {
+            world.particles.burst(x, y, z, 2, [0.25, 0.23, 0.22], 2, 0.4);
+          }
+        };
+        Combat.attachVisuals(game.combat, THREE, scene);
+        game.mission.combat = game.combat;
+        if (id === "intercept") {
+          for (var ci = 0; ci < 3; ci++) Combat.spawnEnemy(C, game.combat, s);
+        }
+      }
       game.state = "flying";
       game.camMode = "chase";
       game.lookYaw = 0; game.lookPitch = 0;
@@ -144,6 +175,7 @@
       game.state = "menu";
       game.mission = null;
       game.autopilot = false;
+      if (game.combat && Combat) { Combat.clearVisuals(game.combat); game.combat = null; }
       SkylaneWorld.setNight(world, false);
       renderer.toneMappingExposure = 1.12;
       $("hud").classList.add("hidden");
@@ -178,6 +210,7 @@
       else if (m.id === "free") goalLine = "Landings " + m.landings.length;
       else if (m.id === "night") goalLine = "Night rings " + m.ringsHit + " / 4";
       else if (m.id === "emergency") goalLine = "Emergency landing — survived on " + Math.round(m.fuelPct * 100) + "% fuel";
+      else if (m.id === "intercept") goalLine = "Drones destroyed " + (game.combat ? game.combat.kills : 0) + " / " + (m.def.kills || 5);
       else goalLine = "Rings " + m.ringsHit + " / 8";
       var lines = [
         "Mission time " + SkylaneHud.fmtTime(m.time),
@@ -185,6 +218,14 @@
         "Landings " + m.landings.length + " (best quality " +
           (m.landings.length ? Math.max.apply(null, m.landings.map(function (l) { return l.quality; })) : 0) + ")",
       ];
+      // v7: the end card shows the dogfight, not just the landing —
+      // drones down, accuracy, and the combat points inside the score
+      if (game.combat && (game.combat.kills > 0 || game.combat.shots > 0)) {
+        lines.push("Combat: " + game.combat.kills + " drones down · accuracy " +
+          Math.round(Combat.accuracy(game.combat) * 100) + "% (" +
+          game.combat.hits + " hits / " + game.combat.shots + " shots)");
+        lines.push("Combat bonus +" + game.combat.score + " pts");
+      }
       showEnd("MISSION COMPLETE", m.def.name + " — flown clean in the golden hour.", lines, m.score);
       audio.good();
     }
@@ -233,6 +274,7 @@
         else if (e.code === "Digit4") startMission("free");
         else if (e.code === "Digit5") startMission("night");
         else if (e.code === "Digit6") startMission("emergency");
+        else if (e.code === "Digit7") startMission("intercept");
         else if (e.code === "Enter") startMission(selMission);
         return;
       }
@@ -272,6 +314,9 @@
     $("btn-again").addEventListener("click", function () { startMission(game.mission.id); });
     $("btn-menu").addEventListener("click", quitToMenu);
 
+    // mouse: hold the button to fire the guns (v7 combat)
+    canvas.addEventListener("mousedown", function () { mouseFire = true; });
+    window.addEventListener("mouseup", function () { mouseFire = false; });
     // mouse: click canvas for pointer lock (look + steer assist)
     canvas.addEventListener("click", function () {
       if (game.state !== "flying") return;
@@ -296,6 +341,7 @@
       input.roll = (keys.ArrowRight ? 1 : 0) + (keys.ArrowLeft ? -1 : 0);
       input.yaw = (keys.KeyD ? 1 : 0) + (keys.KeyA ? -1 : 0);
       input.brake = !!keys.KeyB;
+      input.firing = !!keys.KeyX || mouseFire;
       // mouse steer assist while pointer-locked: look yaw nudges the roll
       if (game.pointerLocked) input.roll += clamp(game.lookYaw * 0.55, -0.6, 0.6);
       input.roll = clamp(input.roll, -1, 1);
@@ -305,7 +351,17 @@
     function autopilotInput(dt) {
       var m = game.mission;
       var tgt = m ? Missions.currentTarget(C, m) : null;
+      // v7: while the dogfight is still on, the autopilot chases the
+      // LOCKED drone (nearest), not the first in the list — otherwise
+      // the nose steers one way while the guns track another, and
+      // every staged round goes into empty sky
+      if (game.combat && game.combat.lock && m && m.id === "intercept" &&
+          game.combat.kills < game.combat.killsNeeded) {
+        var lk = game.combat.lock;
+        tgt = { x: lk.x, y: lk.y, z: lk.z, label: "DRONE", kind: "drone", r: 10 };
+      }
       input.throttleSet = 0.82;
+      input.firing = !!(game.combat && game.combat.autoFire);
       input.gearToggle = false; input.flapToggle = false;
       if (!tgt) { input.pitch = 0; input.roll = 0; input.yaw = 0; return; }
       var dx = tgt.x - s.x, dz = tgt.z - s.z, dy = tgt.y - s.y;
@@ -431,6 +487,85 @@
         s.gearDown = true; s.flaps = 2;
         game.autopilot = true;
         game.camMode = "chase";
+      } else if (staging === "combat" || staging === "coast" || staging === "ringcombat") {
+        // v7 DOGFIGHT: level cruise with the guns already hot, drones
+        // placed where the chase camera can see them, one splashed on
+        // cue — the freeze in the frame loop catches the explosion
+        // mid-bloom with tracers still in the air. Offsets are
+        // [ahead, up, right] in metres from the plane's nose line.
+        var cPose, cOffs;
+        if (staging === "combat") {
+          // peak moment over the open water east of ring 1: sea below,
+          // the isles ahead, three drones in the gunsight
+          cPose = { x: 520, y: 95, z: 140, heading: -Math.PI / 2 };
+          cOffs = [[130, 8, 0], [230, 30, 70], [190, -5, -90], [280, 45, -40], [320, 10, 110]];
+          game.combatKillAt = 1.3; game.combatFreezeAt = 2.0;
+        } else if (staging === "coast") {
+          // over the south coast: sea to the left, the harbor shore
+          // and the main island rising to the right
+          cPose = { x: 150, y: 110, z: 640, heading: -Math.PI / 2 };
+          cOffs = [[140, 5, -40], [260, 35, 80], [200, -10, -110], [300, 50, -30], [340, 15, 90]];
+          game.combatKillAt = 1.3; game.combatFreezeAt = 2.0;
+        } else {
+          // ring run with a fight on: the gate rally, drones on the
+          // ring-1 leg, the lock lit and tracers out
+          cPose = { x: 500, y: 76, z: 120, heading: -Math.PI / 2 };
+          cOffs = [[150, 12, 30], [260, 25, -60], [210, 5, 90], [300, 40, -20]];
+          game.combatKillAt = 1.3; game.combatFreezeAt = 2.0;
+        }
+        resetPlane(cPose);
+        s.onGround = false; s.airborne = true;
+        s.vx = -45; s.vy = 0; s.vz = 0;
+        s.throttle = 0.8;
+        game.autopilot = true;
+        game.camMode = "chase";
+        game.mission.messageT = 0;
+        if (game.combat && Combat) {
+          // drop the random openers: the staged drones sit exactly
+          // where the camera looks, ahead of the nose
+          for (var ci2 = 0; ci2 < game.combat.enemies.length; ci2++) {
+            if (game.combat.enemies[ci2].mesh) scene.remove(game.combat.enemies[ci2].mesh);
+          }
+          game.combat.enemies.length = 0;
+          game.combat.autoFire = false; // opens at t = 1.0, in the frame loop
+          // no random replacements in a staged frame: the fight is
+          // exactly the drones placed above, so the nav target and
+          // the lock never point at a drone 700 m off-camera
+          game.combat.spawn = false;
+          var fwdX = Math.sin(cPose.heading), fwdZ = -Math.cos(cPose.heading);
+          var rgtX = Math.cos(cPose.heading), rgtZ = Math.sin(cPose.heading);
+          for (var di = 0; di < cOffs.length; di++) {
+            var o = cOffs[di];
+            Combat.placeEnemy(C, game.combat, {
+              x: cPose.x + fwdX * o[0] + rgtX * o[2],
+              y: cPose.y + o[1],
+              z: cPose.z + fwdZ * o[0] + rgtZ * o[2],
+            }, { hold: true, hp: 6 });
+          }
+          // snap the chase camera in behind the plane at once (the
+          // cover staging does the same): at SwiftShader frame rates
+          // the lerp needs frames the 1.45 s freeze does not give it
+          camPos.set(cPose.x - fwdX * 15 + rgtX * 9, cPose.y + 4.2, cPose.z - fwdZ * 15 + rgtZ * 9);
+          camLook.set(cPose.x + fwdX * 14, cPose.y + 1.2, cPose.z + fwdZ * 14);
+        }
+      } else if (staging === "combatcomplete") {
+        // v7 end card: an honest 5-kill preset (5 x 150 + 12 hits x 25
+        // = 1050 pts, 60% accuracy) after ~3:05 of flying; the
+        // autopilot landing then adds the time bonus + landing
+        // quality, so the card reads like a real dogfight sortie
+        if (game.combat && Combat) {
+          Combat.presetKills(C, game.combat, 5, 12, 20);
+          game.mission.score = game.combat.score;
+        }
+        game.mission.time = 185;
+        game.mission.messageT = 0;
+        resetPlane({ x: f.x + 320, y: f.elev + 40, z: f.z, heading: -Math.PI / 2 });
+        s.onGround = false; s.airborne = true;
+        s.vx = -32; s.vy = -1.2; s.vz = 0;
+        s.throttle = 0.3;
+        s.gearDown = true; s.flaps = 2;
+        game.autopilot = true;
+        game.camMode = "chase";
       }
       planeObj.group.position.set(s.x, s.y, s.z);
     }
@@ -489,13 +624,17 @@
         // Cover moves closer too (17 -> 13.5 m) with more side offset so
         // the 3/4 view shows the nose and livery, not just the tail.
         var landTight = game.staging === "landing" || game.staging === "complete";
-        var back = tight ? 13.5 : (landTight ? 8.5 : 11 + s.speed * 0.04),
-          up = tight ? 3.2 : (landTight ? 2.2 : 3.2 + s.speed * 0.008);
+        // v7 combat chase: pulled back with a side offset, a true
+        // three-quarter rear view — the guns, the tracers and the
+        // drones ahead all read in the frame instead of the tail
+        var combatView = !!game.combat;
+        var back = tight ? 13.5 : (landTight ? 8.5 : (combatView ? 15 : 11 + s.speed * 0.04)),
+          up = tight ? 3.2 : (landTight ? 2.2 : (combatView ? 4.2 : 3.2 + s.speed * 0.008));
         // ANGLE FIX (v6): a wider side offset (12 m, not 8) puts the
         // chase at a true three-quarter rear angle, so the fuselage
         // flank — and the KESTREL-9 name running along it — reads
         // instead of the tail alone
-        var side = tight ? 12 : (landTight ? 2.5 : 0);
+        var side = tight ? 12 : (landTight ? 2.5 : (combatView ? 9 : 0));
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -541,6 +680,12 @@
       // Visual interpolation uses a clamped step so the camera never jumps.
       var rawDt = (now - last) / 1000 || 0.016;
       if (rawDt > 1) rawDt = 1;
+      // v7: the first headless frame's rAF timestamp can sit ~1 s
+      // BEFORE performance.now(), so rawDt goes negative — and the
+      // camera lerp factor 1-exp(-ldt*8) then goes hugely negative
+      // and flings the camera millions of metres out (the v6 cover
+      // hid it with a snap; a 1.45 s combat freeze never recovers)
+      if (rawDt < 0) rawDt = 0;
       last = now;
       var visDt = Math.min(rawDt, 0.06);
       game.time += rawDt;
@@ -570,6 +715,10 @@
             Missions.update(C, game.mission, step, s, evts);
             consumeMissionEvents();
           }
+          if (game.combat && game.mission && !game.mission.done) {
+            Combat.update(C, game.combat, step, s, input.firing);
+            consumeCombatEvents();
+          }
           if (game.mission && game.mission.done && game.state === "flying") endMissionComplete();
           acc -= step; n++;
           if (s.crashed) break;
@@ -586,6 +735,25 @@
           ((s.x < 105 && s.agl < 60) || game.mission.time > 215)) {
           game.coverPreFrozen = true;
           game.state = "paused";
+        }
+        // v7 combat staging: splash the nearest drone on cue, then
+        // freeze while its explosion is mid-bloom and the tracers are
+        // still in the air — the paused frame holds the peak moment
+        if (game.combat && (game.staging === "combat" || game.staging === "coast" || game.staging === "ringcombat")) {
+          // guns open at t = 0.5, a full frame before the scripted
+          // kill: the tracers are still in the air at the freeze,
+          // and staged drones carry 6 hp so the guns cannot clear
+          // the sky before the frame is taken
+          if (!game.combat.autoFire && game.mission.time > 0.5) game.combat.autoFire = true;
+          if (!game.combatScripted && game.mission.time > game.combatKillAt) {
+            game.combatScripted = true;
+            var ne = Combat.nearestEnemy(game.combat, s);
+            if (ne) Combat.destroyEnemy(C, game.combat, ne);
+          }
+          if (!game.combatPreFrozen && game.mission.time > game.combatFreezeAt) {
+            game.combatPreFrozen = true;
+            game.state = "paused";
+          }
         }
         syncCrates(game.mission);
         // spray when skimming the sea
@@ -614,9 +782,10 @@
         var rw = new THREE.Vector3(3.9, 0.05, -0.35).applyQuaternion(q).add(planeObj.group.position);
         SkylanePlane.pushTrail(planeObj.trailL, lw.x, lw.y, lw.z);
         SkylanePlane.pushTrail(planeObj.trailR, rw.x, rw.y, rw.z);
+        if (game.combat) Combat.render(game.combat, visDt);
         updateCamera(visDt, rawDt);
         var tgt = game.mission ? Missions.currentTarget(C, game.mission) : null;
-        hud.update(s, game.mission, tgt, visDt);
+        hud.update(s, game.mission, tgt, visDt, game.combat);
       } else if (game.state === "menu") {
         // slow cinematic orbit over the isles behind the menu
         var t = game.time * 0.045;
@@ -671,6 +840,22 @@
           // crash already handled via physics events
         }
       }
+    }
+
+    function consumeCombatEvents() {
+      var m = game.mission, cb = game.combat;
+      while (cb.events.length) {
+        var e = cb.events.shift();
+        if (e.type === "hit") {
+          audio.click();
+        } else if (e.type === "kill") {
+          audio.good();
+          m.message = "DRONE DOWN! " + cb.kills + " / " + (m.def.kills || C.COMBAT.interceptKills) +
+            " — +" + C.COMBAT.killScore + " pts";
+          m.messageT = 4;
+        }
+      }
+      if (cb.pendingScore) { m.score += cb.pendingScore; cb.pendingScore = 0; }
     }
 
     // expose live state for testing / screenshots

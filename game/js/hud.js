@@ -45,6 +45,12 @@
         return "DROP CRATE " + (m.cratesDropped + 1) + " OF 3 — HARBOR TARGET";
       return "LAND AT HALCYON FIELD — " + fmtDist(dist);
     }
+    if (m.id === "intercept") {
+      var need = m.def.kills || 5;
+      var k = m.combat ? m.combat.kills : 0;
+      if (k < need) return "SPLASH THE DRONES — " + (need - k) + " TO GO · HOLD CLICK / X TO FIRE";
+      return "DRONES DOWN — LAND AT HALCYON FIELD — " + fmtDist(dist);
+    }
     return "FREE FLIGHT — ENJOY THE GOLDEN HOUR";
   }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -100,7 +106,7 @@
       g.restore();
     }
 
-    function update(s, mission, target, dt) {
+    function update(s, mission, target, dt, combat) {
       var C2 = C;
       var kts = s.speed * C2.KT_PER_MS;
       $("hud-kts").textContent = Math.round(kts);
@@ -132,6 +138,15 @@
       } else {
         $("hud-target-label").textContent = "FREE FLIGHT";
         $("hud-target-dist").textContent = "";
+      }
+      // target lock: nearest enemy drone with its distance, red and
+      // loud — the thing a still screenshot must show is happening
+      var lockEl = $("hud-lock");
+      if (lockEl) {
+        if (combat && combat.lock) {
+          lockEl.textContent = "◉ LOCK — DRONE " + fmtDist(combat.lockDist);
+          lockEl.classList.remove("hidden");
+        } else lockEl.classList.add("hidden");
       }
       // objective headline under the compass
       var objEl = $("hud-objective");

@@ -10,6 +10,7 @@ const C = require("../game/js/config.js").SKYLANE_CONFIG ||
   (function () { require("../game/js/config.js"); return global.SKYLANE_CONFIG; })();
 const Phys = require("../game/js/physics.js");
 const Missions = require("../game/js/missions.js");
+const Combat = require("../game/js/combat.js");
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -341,7 +342,7 @@ check("airborne after takeoff", tk.s.airborne === true);
 
 // ---- v4: mission roster ----------------------------------------------------------------------
 (function () {
-  check("six missions incl. night + emergency", C.MISSIONS.length === 6, "n=" + C.MISSIONS.length);
+  check("seven missions incl. night + emergency + intercept", C.MISSIONS.length === 7, "n=" + C.MISSIONS.length);
   const night = C.MISSIONS.find((d) => d.id === "night");
   const em = C.MISSIONS.find((d) => d.id === "emergency");
   check("night mission is a 4-ring night run", night && night.rings === 4 && night.night === true);
@@ -432,6 +433,129 @@ check("airborne after takeoff", tk.s.airborne === true);
   check("v6 sun disc inside the landing frame", offWest < 37, "off-west=" + offWest.toFixed(1) + " deg");
   check("v6 sun is still a low western sun", offWest > 15 && C.SUN_ELEVATION < 0.4,
     "off-west=" + offWest.toFixed(1) + " elev=" + C.SUN_ELEVATION);
+})();
+
+// ---- v7 combat: config ------------------------------------------------------
+(function () {
+  check("v7 has seven missions", C.MISSIONS.length === 7, "n=" + C.MISSIONS.length);
+  const ic = C.MISSIONS[6];
+  check("v7 intercept is mission 7", ic.id === "intercept" && ic.num === 7, ic.id);
+  check("v7 intercept wants 5 kills", ic.combat === true && ic.kills === 5, "kills=" + ic.kills);
+  check("v7 combat tuning sane", C.COMBAT.droneHp === 2 && C.COMBAT.killScore === 150 &&
+    C.COMBAT.hitScore === 25 && C.COMBAT.gunRange === 520 && C.COMBAT.lockRange === 800,
+    JSON.stringify(C.COMBAT));
+})();
+
+// ---- v7 combat: guns, hits, kills --------------------------------------------------
+(function () {
+  function airState() {
+    const s = Phys.makeState(C, { x: 0, y: 100, z: 0, heading: 0 });
+    s.onGround = false; s.airborne = true; s.pitch = 0;
+    return s;
+  }
+  // fresh fight
+  const cb0 = Combat.makeCombat(C, { missionId: "intercept" });
+  check("v7 combat starts empty", cb0.kills === 0 && cb0.shots === 0 && cb0.enemies.length === 0 &&
+    cb0.killsNeeded === 5, "kills=" + cb0.kills);
+
+  // dead-ahead drone takes a hit, loses 1 hp, pays 25 pts
+  const cb = Combat.makeCombat(C, { missionId: "intercept" });
+  const s = airState();
+  const e = Combat.spawnEnemy(C, cb, s, { x: 0, y: 100, z: -200 });
+  check("v7 drone spawns with 2 hp", e.hp === 2 && cb.enemies.length === 1, "hp=" + e.hp);
+  Combat.update(C, cb, 0.1, s, false); // lock on
+  check("v7 lock picks the drone ahead", cb.lock === e, "lock=" + (cb.lock && cb.lock.id));
+  check("v7 lock distance ~200 m", approx(cb.lockDist, 200, 15), "d=" + cb.lockDist.toFixed(1));
+  check("v7 gun fires", Combat.fireGun(C, cb, s) === true);
+  check("v7 dead-ahead hit lands", cb.hits === 1 && e.hp === 1, "hits=" + cb.hits + " hp=" + e.hp);
+  check("v7 hit pays 25 pts", cb.score === 25 && cb.pendingScore === 25, "score=" + cb.score);
+  check("v7 tracer flies", cb.tracers.length === 1, "tracers=" + cb.tracers.length);
+
+  // second hit splashes it: kill pays 150, boom recorded, drone gone
+  cb.cooldown = 0;
+  Combat.fireGun(C, cb, s);
+  check("v7 two hits splash the drone", cb.kills === 1 && cb.enemies.indexOf(e) === -1,
+    "kills=" + cb.kills + " alive=" + cb.enemies.length);
+  check("v7 kill score is 2 hits + kill", cb.score === 200 && cb.pendingScore === 200, "score=" + cb.score);
+  check("v7 explosion recorded", cb.booms.length === 1, "booms=" + cb.booms.length);
+  check("v7 kill event emitted", cb.events.some(function (ev) { return ev.type === "kill"; }));
+
+  // off-axis drone, 45 deg off the nose: outside the 35 deg aim
+  // cone, so the tracer flies straight past it, no hit
+  const cb2 = Combat.makeCombat(C, { missionId: "intercept" });
+  Combat.spawnEnemy(C, cb2, s, { x: 200, y: 100, z: -200 });
+  Combat.update(C, cb2, 0.1, s, false);
+  Combat.fireGun(C, cb2, s);
+  check("v7 off-axis shot misses", cb2.hits === 0 && cb2.shots === 1, "hits=" + cb2.hits);
+
+  // drone behind the player: the gun never shoots backwards
+  const cb3 = Combat.makeCombat(C, { missionId: "intercept" });
+  Combat.spawnEnemy(C, cb3, s, { x: 0, y: 100, z: 200 });
+  Combat.update(C, cb3, 0.1, s, false);
+  Combat.fireGun(C, cb3, s);
+  check("v7 rear drone is not hit", cb3.hits === 0, "hits=" + cb3.hits);
+
+  // tracers die fast
+  Combat.update(C, cb, 0.3, s, false);
+  check("v7 tracers fade out", cb.tracers.length === 0, "tracers=" + cb.tracers.length);
+
+  // accuracy
+  check("v7 accuracy is hits / shots", approx(Combat.accuracy(cb), 1, 0.001), "acc=" + Combat.accuracy(cb));
+  check("v7 fresh fight accuracy is 0", Combat.accuracy(Combat.makeCombat(C, {})) === 0);
+})();
+
+// ---- v7 combat: spawning, floor, preset -------------------------------------------
+(function () {
+  const s = Phys.makeState(C, { x: 0, y: 100, z: 0, heading: 0 });
+  s.onGround = false; s.airborne = true;
+  // intercept keeps up to 3 drones in the air while kills are owed
+  const cb = Combat.makeCombat(C, { missionId: "intercept" });
+  for (let i = 0; i < 300; i++) Combat.update(C, cb, 0.1, s, false);
+  check("v7 intercept spawns up to 3 drones", cb.enemies.length === 3, "alive=" + cb.enemies.length);
+  // once the kills are banked, no fresh drones launch
+  Combat.presetKills(C, cb, 5, 12, 20);
+  const before = cb.enemies.length;
+  for (let i = 0; i < 100; i++) Combat.update(C, cb, 0.1, s, false);
+  check("v7 no spawns after 5 kills", cb.enemies.length === before, "alive=" + cb.enemies.length);
+  // preset score math: 5 kills x 150 + 12 hits x 25
+  check("v7 preset kills score is 1050", cb.score === 1050, "score=" + cb.score);
+  check("v7 preset accuracy is 60%", approx(Combat.accuracy(cb), 0.6, 0.001), "acc=" + Combat.accuracy(cb));
+  // a drone placed too low is lifted above the floor
+  const cb2 = Combat.makeCombat(C, { missionId: "intercept" });
+  const low = Combat.spawnEnemy(C, cb2, s, { x: 0, y: 10, z: -200 });
+  Combat.update(C, cb2, 1, s, false);
+  check("v7 drone never flies under the floor", low.y >= 30, "y=" + low.y.toFixed(1));
+  // free flight: endless targets, a splashed drone is replaced
+  const cb3 = Combat.makeCombat(C, { missionId: "free" });
+  for (let i = 0; i < 300; i++) Combat.update(C, cb3, 0.1, s, false);
+  check("v7 free flight holds drones", cb3.enemies.length === 3, "alive=" + cb3.enemies.length);
+  Combat.destroyEnemy(C, cb3, cb3.enemies[0]);
+  check("v7 destroyEnemy banks the kill", cb3.kills === 1, "kills=" + cb3.kills);
+  for (let i = 0; i < 100; i++) Combat.update(C, cb3, 0.1, s, false);
+  check("v7 free flight replaces a kill", cb3.enemies.length === 3, "alive=" + cb3.enemies.length);
+})();
+
+// ---- v7 combat: intercept mission flow --------------------------------------------
+(function () {
+  const s = Phys.makeState(C, { x: 0, y: 100, z: 0, heading: 0 });
+  s.onGround = false; s.airborne = true;
+  const m = Missions.makeMission(C, "intercept");
+  Missions.start(C, m);
+  m.combat = Combat.makeCombat(C, { missionId: "intercept" });
+  Combat.spawnEnemy(C, m.combat, s, { x: 0, y: 100, z: -200 });
+  const tgt = Missions.currentTarget(C, m);
+  check("v7 intercept target is a drone", tgt && tgt.kind === "drone", tgt && tgt.label);
+  const prog = Missions.progressText(C, m);
+  check("v7 intercept progress counts kills", prog.a.indexOf("(0/5)") !== -1, prog.a);
+  // landing early does NOT finish the dogfight
+  Missions.update(C, m, 0.1, s, [{ type: "touchdown", quality: 150, vspeed: 2, field: "HAL" }]);
+  check("v7 intercept stays open with drones left", m.done === false, "done=" + m.done);
+  // 5 kills banked, then a Halcyon landing finishes it
+  Combat.presetKills(C, m.combat, 5, 12, 20);
+  const tgt2 = Missions.currentTarget(C, m);
+  check("v7 intercept target is Halcyon after 5 kills", tgt2 && tgt2.kind === "land", tgt2 && tgt2.label);
+  Missions.update(C, m, 0.1, s, [{ type: "touchdown", quality: 150, vspeed: 2, field: "HAL" }]);
+  check("v7 intercept completes on the home landing", m.done === true, "done=" + m.done);
 })();
 
 console.log("\n" + pass + " passed, " + fail + " failed");
