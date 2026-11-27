@@ -73,6 +73,47 @@
     return new THREE.CanvasTexture(cv);
   }
 
+  // Dark livery (combatcomplete end card only): teal fuselage with
+  // a cream name and gold stripe, so the parked Kestrel reads as a
+  // plane against the pale runway instead of vanishing into it.
+  // The cream livery above is the flight livery; this one is only
+  // swapped in by the end-card staging, never in flight.
+  function liveryTextureDark() {
+    var cv = document.createElement("canvas");
+    cv.width = 512; cv.height = 512;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#0f6f6a"; g.fillRect(0, 0, 512, 512);
+    g.fillStyle = "#14313d"; g.fillRect(0, 400, 512, 112);
+    g.fillStyle = "#e8a91c"; g.fillRect(0, 384, 512, 16);
+    g.strokeStyle = "rgba(243,234,214,0.4)"; g.lineWidth = 3;
+    for (var px = 64; px < 512; px += 64) {
+      g.beginPath(); g.moveTo(px, 0); g.lineTo(px, 512); g.stroke();
+    }
+    g.fillStyle = "rgba(243,234,214,0.5)";
+    for (var rx = 32; rx < 512; rx += 32)
+      for (var ry = 24; ry < 512; ry += 48) g.fillRect(rx, ry, 3, 3);
+    g.fillStyle = "#f3ead6"; g.font = "bold 66px Arial"; g.textAlign = "center";
+    g.save(); g.translate(128, 200); g.rotate(Math.PI / 2); g.fillText("KESTREL-9", 0, 22); g.restore();
+    g.save(); g.translate(384, 200); g.rotate(-Math.PI / 2); g.fillText("KESTREL-9", 0, 22); g.restore();
+    return new THREE.CanvasTexture(cv);
+  }
+
+  function wingTextureDark() {
+    var cv = document.createElement("canvas");
+    cv.width = 256; cv.height = 128;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#0f6f6a"; g.fillRect(0, 0, 256, 128);
+    g.fillStyle = "#e8a91c"; g.fillRect(0, 8, 256, 10);
+    g.strokeStyle = "rgba(243,234,214,0.35)"; g.lineWidth = 2;
+    for (var x = 32; x < 256; x += 32) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 128); g.stroke();
+    }
+    g.fillStyle = "rgba(243,234,214,0.4)";
+    for (var rx = 16; rx < 256; rx += 32)
+      for (var ry = 30; ry < 128; ry += 24) g.fillRect(rx, ry, 2, 2);
+    return new THREE.CanvasTexture(cv);
+  }
+
   function buildPlane() {
     var group = new THREE.Group();
     // painted metal, not flat plastic: a lower roughness and a
@@ -87,6 +128,10 @@
     // fuselage: main tube + nose + tail cone, with livery texture
     var livTex = liveryTexture();
     var bodyMat = new THREE.MeshStandardMaterial({ map: livTex, roughness: 0.32, metalness: 0.4 });
+    // end-card dark livery (swapped in by applyDarkLivery only)
+    var darkBodyMat = new THREE.MeshStandardMaterial({ map: liveryTextureDark(), roughness: 0.32, metalness: 0.4 });
+    var darkWingMat = new THREE.MeshStandardMaterial({ map: wingTextureDark(), roughness: 0.4, metalness: 0.3 });
+    var darkCream = new THREE.MeshStandardMaterial({ color: 0x0f6f6a, roughness: 0.35, metalness: 0.25 });
     var body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.5, 4.6, 14), bodyMat);
     body.rotation.x = Math.PI / 2;
     body.position.z = 0.2;
@@ -119,12 +164,14 @@
     // wings: tapered boxes with slight dihedral, teal tips
     var wingTex = wingTexture();
     var wingMat = new THREE.MeshStandardMaterial({ map: wingTex, roughness: 0.4, metalness: 0.3 });
+    var wingPanels = [];
     function wing(side) {
       var w = new THREE.Group();
       var panel = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.14, 1.25), wingMat);
       panel.position.x = side * 1.95;
       panel.castShadow = true;
       w.add(panel);
+      wingPanels.push(panel);
       var tip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 1.1), teal);
       tip.position.x = side * 3.65;
       w.add(tip);
@@ -215,7 +262,29 @@
       group: group, prop: prop, disc: disc, gear: gear, blades: blades,
       navL: navL, navR: navR, strobe: strobe,
       trailL: trailL, trailR: trailR,
+      parts: { body: body, nose: nose, tail: tail, wings: wingPanels, fin: fin },
+      darkMats: { body: darkBodyMat, cream: darkCream, wing: darkWingMat, fin: teal },
     };
+  }
+
+  // End-card only: swap the cream flight livery for the dark one so
+  // the parked Kestrel reads against the pale runway. Called from
+  // the combatcomplete staging; no other staging or gameplay path
+  // uses it, so the flight shots keep the cream livery.
+  function applyDarkLivery(pl) {
+    if (!pl || !pl.parts || !pl.darkMats) return;
+    pl.parts.body.material = pl.darkMats.body;
+    pl.parts.nose.material = pl.darkMats.cream;
+    pl.parts.tail.material = pl.darkMats.cream;
+    for (var i = 0; i < pl.parts.wings.length; i++) pl.parts.wings[i].material = pl.darkMats.wing;
+    // the fin reads as a separate teal signboard from the side —
+    // proven by probe: hiding it leaves a clean tapering tail,
+    // while its flat 1.1 x 1.25 m face is a uniform rectangle that
+    // no livery or repositioning fixes (it floats free of the
+    // fuselage because the tail cone tapers to a hairline where
+    // the fin stands). The end card hides the fin; the flight
+    // shots keep it.
+    pl.parts.fin.visible = false;
   }
 
   function pushTrail(trail, x, y, z) {
@@ -253,6 +322,6 @@
   function lerp(a, b, t) { return a + (b - a) * t; }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-  var api = { buildPlane: buildPlane, updatePlane: updatePlane, pushTrail: pushTrail };
+  var api = { buildPlane: buildPlane, updatePlane: updatePlane, pushTrail: pushTrail, applyDarkLivery: applyDarkLivery };
   global.SkylanePlane = api;
 })(typeof window !== "undefined" ? window : globalThis);

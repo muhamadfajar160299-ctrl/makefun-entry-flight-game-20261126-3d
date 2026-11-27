@@ -576,6 +576,11 @@
         }
         game.mission.time = 185;
         game.mission.messageT = 0;
+        // v9: dark end-card livery — the cream flight livery
+        // vanishes against the pale runway, so the parked Kestrel
+        // wears teal for the end card only (other stagings keep
+        // the cream livery).
+        if (SkylanePlane.applyDarkLivery) SkylanePlane.applyDarkLivery(planeObj);
         resetPlane({ x: f.x + 320, y: f.elev + 40, z: f.z, heading: -Math.PI / 2 });
         s.onGround = false; s.airborne = true;
         s.vx = -32; s.vy = -1.2; s.vz = 0;
@@ -653,20 +658,24 @@
         // plane small at the left edge behind its own explosion)
         var combatView = !!game.combat;
         var ringTight = game.staging === "ringcombat";
-        // v8d: third pass (back 7 / up 1.8 / side 10) backfired —
-        // closer + lower put the tail fin ("9K") huge again while
-        // the fuselage foreshortened away. The v8b side profile
-        // (back 10 / up 2.0 / side 14) read best: keep its angle,
-        // pull slightly closer and tighten FOV so the Kestrel fills
-        // ~a third of the frame instead of a fifth.
+        // v9: Larisha looked at the v8 frame and the plane is NOT
+        // visible ("Kaga keliatan") — she is right: the rear-side
+        // angle foreshortens the fuselage to a pale blob on pale
+        // runway, and the fin reads as a separate "9K" signboard.
+        // Go pure side profile from the SOUTH side (side -14): the
+        // full flank + KESTREL-9 name + fin at the tail end read as
+        // one aircraft, the cream fuselage sits against the dark
+        // north grass and hills instead of the bright strip, and
+        // the terminal/taxiway stay behind the camera. Back 2.5 /
+        // up 1.6 / FOV 38 puts the Kestrel at ~40% of the frame.
         var completeView = game.staging === "combatcomplete";
-        var back = tight ? 13.5 : (landTight ? 8.5 : (completeView ? 9 : (combatView ? (ringTight ? 13 : 15) : 11 + s.speed * 0.04))),
-          up = tight ? 3.2 : (landTight ? 2.2 : (completeView ? 2.2 : (combatView ? (ringTight ? 3.8 : 4.2) : 3.2 + s.speed * 0.008)));
+        var back = tight ? 13.5 : (landTight ? 8.5 : (completeView ? 2.5 : (combatView ? (ringTight ? 13 : 15) : 11 + s.speed * 0.04))),
+          up = tight ? 3.2 : (landTight ? 2.2 : (completeView ? 1.0 : (combatView ? (ringTight ? 3.8 : 4.2) : 3.2 + s.speed * 0.008)));
         // ANGLE FIX (v6): a wider side offset (12 m, not 8) puts the
         // chase at a true three-quarter rear angle, so the fuselage
         // flank — and the KESTREL-9 name running along it — reads
         // instead of the tail alone
-        var side = tight ? 12 : (landTight ? 2.5 : (completeView ? 12 : (combatView ? (ringTight ? 7 : 9) : 0)));
+        var side = tight ? 12 : (landTight ? 2.5 : (completeView ? -14 : (combatView ? (ringTight ? 7 : 9) : 0)));
         var q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch * 0.4, -s.heading, -s.roll * 0.45, "YXZ"));
         tmpV.set(side, up, back).applyQuaternion(q2).add(planeObj.group.position);
         var k = 1 - Math.exp(-ldt * (tight ? 22 : 8));
@@ -699,7 +708,7 @@
         var k2 = 1 - Math.exp(-ldt * 7);
         camLook.lerp(tmpV, k2);
         camera.lookAt(camLook);
-        var wantFov = landTight ? 46 : (completeView ? 44 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16);
+        var wantFov = landTight ? 46 : (completeView ? 36 : 62 + clamp((s.speed - 30) / 50, 0, 1) * 16);
         camera.fov = lerp(camera.fov, wantFov, ldt * 3);
       }
       camera.updateProjectionMatrix();
